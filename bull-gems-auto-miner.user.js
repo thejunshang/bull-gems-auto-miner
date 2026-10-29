@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/thejunshang/bull-gems-auto-miner/issues
 // @downloadURL  https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
 // @updateURL    https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
-// @version      3.2.2
+// @version      3.2.3
 // @description  优先领取、检查商店购买矿力装备、部署允许的最高级矿区，串行操作与异常恢复。
 // @match        https://gem.bullshot.io/*
 // @grant        none
@@ -27,7 +27,7 @@
     {name:'Greenstone Quarry',minutes:10,level:1}
   ];
   const EQUIPMENT = ['Iron Pickaxe','Iron Drill','Copper Turbo Drill','Ruby Laser','Cryo Plasma Drill','Void Annihilator'];
-  const VERSION = '3.2.2';
+  const VERSION = '3.2.3';
   const LOG_KEY = 'bull-gems-diagnostics-v1';
   const runId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,7);
   let logEntries = [];
@@ -70,7 +70,7 @@
   const persist = () => { localStorage.setItem(STATE_KEY, JSON.stringify(state)); };
   function diagnosticState() {
     return {phase:state.phase,target:state.targetMine || null,next:state.next,waitReason:state.waitReason || null,
-      energyWait:state.energyWait || null,shopRetryAt:state.shopRetryAt || 0,
+      energyWait:state.energyWait || null,shopRetryAt:state.shopRetryAt || 0,purchaseReview:state.purchaseReview || null,
       shop:state.shop ? {mine:state.shop.mine,startedAt:state.shop.startedAt,pending:state.shop.pending || null} : null};
   }
   logEvent('page.start',diagnosticState());
@@ -125,7 +125,7 @@
   const panel = document.createElement('div');
   panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#101710;color:#fff;border:1px solid #baff31;border-radius:12px;padding:14px;font:14px/1.6 sans-serif;box-shadow:0 3px 20px #0008;width:250px';
   const title = document.createElement('strong');
-  title.textContent = 'Bull Gems 自动挖矿与升级 v3.2.2';
+  title.textContent = 'Bull Gems 自动挖矿与升级 v3.2.3';
   const status = document.createElement('div');
   const countdown = document.createElement('div');
   const settings = document.createElement('div');
@@ -240,7 +240,9 @@
       return;
     }
     const target = mine || MINES.find(m => m.name === state.targetMine) || MINES[MINES.length-1];
-    state.shop = {mine:target.name,startedAt:Date.now(),pending:null};
+    // Starting or resuming must not overwrite an unresolved purchase.
+    const pending = state.shop?.pending || state.purchaseReview || null;
+    state.shop = {mine:target.name,startedAt:Date.now(),pending};
     state.phase = 'shop';
     state.shopRequested = false;
     state.next = next;
@@ -520,16 +522,17 @@
       readyState:document.readyState};
   }
   function deferShop(reason) {
-    // An uncertain purchase must be reconciled; never discard its journal to keep mining.
+    // Preserve the journal separately so a shop outage cannot also block claims/mining.
+    // The next shop job restores it and reconciles BEFORE any further purchase.
     if (state.shop?.pending) {
-      logEvent('shop.pending-blocks-return',{reason,...shopDiagnostics()});
-      recover('商店未加载且有待确认购买，保留记录继续核对'); return;
+      state.purchaseReview = state.shop.pending;
+      logEvent('purchase.review-deferred',{reason,pending:state.purchaseReview});
     }
     state.shopRetryAt = Date.now()+300000;
     state.shop = null; state.phase = 'deploy'; state.shopRequested = false;
     persist();
     logEvent('shop.load-deferred',{reason,retryAt:state.shopRetryAt,...shopDiagnostics()});
-    message('商店数据未加载完成，5分钟后重试商店；先返回 Mining 领取与部署');
+    message(state.purchaseReview ? '购买结果待核对，记录已保留，暂停新购买；返回 Mining 继续领取部署，5分钟后重试商店' : '商店数据未加载完成，5分钟后重试商店；先返回 Mining 领取与部署');
     navigate(MINING_URL);
   }
   async function waitForShop(id) {
@@ -556,16 +559,26 @@
     return Boolean(item?.owned && account && account.power >= pending.beforePower+pending.gain &&
       account.balance <= pending.beforeBalance-pending.price+0.01);
   }
+  function purchaseResolution(pending, item, account) {
+    if (purchaseConfirmed(pending,item,account)) return 'confirmed';
+    // Owned means this single-purchase tool cannot be bought again. The old journal
+    // may predate current balances; do not claim its historic debit was verified.
+    if (item?.owned && account && Number.isFinite(account.balance) && Number.isFinite(account.power)) return 'already-owned';
+    return null;
+  }
   async function confirmPurchase(id) {
     const pending = state.shop.pending;
     const deadline = Date.now()+30000;
     while (active(id) && onShop() && Date.now()<deadline) {
       const item = equipmentItem(pending.name), account = shopAccount();
-      if (purchaseConfirmed(pending,item,account)) {
-        logEvent('purchase.confirmed',{name:pending.name,account});
+      const resolution = purchaseResolution(pending,item,account);
+      if (resolution) {
+        logEvent(resolution==='confirmed' ? 'purchase.confirmed' : 'purchase.ownership-reconciled',{name:pending.name,account,resolution});
+        state.lastPurchaseReview = {...pending,resolution,resolvedAt:Date.now()};
         state.shop.pending = null;
+        state.purchaseReview = null;
         persist();
-        message(`${pending.name} 购买已确认，当前 ${account.power} PWR`);
+        message(resolution==='confirmed' ? `${pending.name} 购买已确认，当前 ${account.power} PWR` : `${pending.name} 已拥有，不重复购买；旧记录金额变化无法确认，当前 ${account.power} PWR`);
         await sleep(2500+Math.random()*3000);
         return true;
       }
@@ -573,7 +586,7 @@
     }
     if (active(id)) {
       logEvent('purchase.unconfirmed',{pending,account:shopAccount(),...shopDiagnostics()});
-      recover('购买结果未确认，刷新后先核对同一笔购买，不重复点击');
+      deferShop('购买结果30秒内未确认，保留记录并延迟核对');
     }
     return false;
   }
@@ -702,6 +715,7 @@
       if (state.targetMine) countdown.textContent += `；目标：${state.targetMine}`;
       if (state.energyWait?.until > Date.now()) countdown.textContent += '（等待能量，不降级）';
       if (state.shopRetryAt > Date.now()) countdown.textContent += `；商店${Math.ceil((state.shopRetryAt-Date.now())/60000)}分钟后重试`;
+      if (state.purchaseReview) countdown.textContent += '；购买待核对（暂停新购买）';
       if (busy || collecting) return;
       // Claim one ready reward before any shop visit or deployment; drilling positions do not block.
       if (findButton('collect rewards').some(usable) || findButton('collect').some(usable)) {

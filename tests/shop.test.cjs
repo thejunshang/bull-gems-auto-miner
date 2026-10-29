@@ -41,6 +41,13 @@ test('single purchase is confirmed only by owned, debit and PWR increase togethe
   assert.equal(ctx.purchaseConfirmed(p,{owned:true},{balance:2223.4,power:10}),false);
   assert.equal(ctx.purchaseConfirmed(p,{owned:true},{balance:1873.4,power:4}),false);
 });
+test('old owned tool can be reconciled without claiming a historic charge was confirmed',()=>{
+  const pending={beforeBalance:2154.6,beforePower:10,price:350,gain:6};
+  assert.equal(ctx.purchaseResolution(pending,{owned:true},{balance:2004.6,power:10}),'already-owned');
+  assert.equal(ctx.purchaseResolution(pending,{owned:false},{balance:2004.6,power:10}),null);
+  assert.equal(ctx.purchaseResolution(pending,{owned:true},null),null);
+  assert.equal(ctx.purchaseResolution(pending,{owned:true},{balance:1804.6,power:16}),'confirmed');
+});
 test('shop preserves selected mine and energy wait after PWR purchase',()=>{
   const until=Date.now()+420000;
   const c=vm.createContext({Date,state:{shop:{mine:'Crystal Cavern'},next:until,waitReason:'energy',targetMine:'Crystal Cavern',energyWait:{mine:'Crystal Cavern',until}},

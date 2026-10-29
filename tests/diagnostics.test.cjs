@@ -16,7 +16,7 @@ test('diagnostic history survives a new document and records version, route and 
   const second=makeLogger(store);second.logEvent('page.start');
   const events=JSON.parse(store.get('bull-gems-diagnostics-v1'));
   assert.equal(events.length,2);assert.equal(events[0].event,'shop.loading');
-  assert.equal(events[0].path,'/trade');assert.equal(events[0].version,'3.2.2');
+  assert.equal(events[0].path,'/trade');assert.equal(events[0].version,'3.2.3');
   assert.ok(Number.isFinite(Date.parse(events[0].at)));
 });
 test('history is bounded to the last three hundred events',()=>{
@@ -53,9 +53,10 @@ test('empty shop returns to Mining and sets a five minute retry without losing e
   assert.ok(r.c.state.shopRetryAt>=before+300000&&r.c.state.shopRetryAt<=Date.now()+300000);
   assert.equal(r.c.state.energyWait.mine,'Crystal Cavern');assert.equal(r.c.state.next,9999999999999);
 });
-test('uncertain purchase prevents discarding the journal on shop timeout',()=>{
+test('uncertain purchase is preserved separately while mining can continue',()=>{
   const pending={name:'Iron Drill',price:350},r=recovery(pending);
-  assert.deepEqual(r.calls,['recover']);assert.equal(r.c.state.shop.pending,pending);
+  assert.deepEqual(r.calls,['persist','mining']);assert.equal(r.c.state.shop,null);
+  assert.equal(r.c.state.purchaseReview,pending);assert.equal(r.c.state.phase,'deploy');
 });
 test('shop backoff skips navigation across subsequent deployment rounds, then retries when due',()=>{
   const calls=[];
@@ -66,4 +67,12 @@ test('shop backoff skips navigation across subsequent deployment rounds, then re
   c.startShop();assert.deepEqual(calls,[]);assert.equal(c.state.phase,'deploy');
   c.state.phase='shop';c.startShop();assert.deepEqual(calls,[]);
   c.state.shopRetryAt=Date.now()-1;c.startShop();assert.deepEqual(calls,['shop']);
+});
+test('new shop jobs restore suspended purchases before considering any new item',()=>{
+  const pending={name:'Iron Drill',price:350};
+  const c=vm.createContext({Date,state:{purchaseReview:pending},logEvent(){},persist(){},message(){},busy:false,next:0,
+    MINES:[{name:'Greenstone Quarry'}],SHOP_URL:'shop',navigate(){}});
+  vm.runInContext(source.slice(source.indexOf('  function startShop('),source.indexOf('  async function waitForMine(')),c);
+  c.startShop();assert.equal(c.state.shop.pending,pending);
+  c.startShop();assert.equal(c.state.shop.pending,pending);
 });
