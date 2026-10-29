@@ -2,6 +2,8 @@
 
 ## 定位与等待
 
+v2.2 起，仅匹配 `https://gem.bullshot.io/*`。脚本注入非 Mining 路径时使用 `location.replace` 返回 Mining；站内无刷新导航每秒检查一次。这一行为不依赖挖矿开启状态。需要使用其他站内功能时，在 Tampermonkey 中禁用脚本。
+
 脚本根据 `h2` 标题 Greenstone Quarry 限定其 Deploy，避免把 Crystal Cavern 等其他矿场的同名按钮选进来。弹窗限定为 `role="dialog"` 且标题为 Deploy to Greenstone Quarry。
 
 页面刷新或首次开始后，脚本等待页面初始化，尝试矿场跳转按钮，逐步滚动触发加载。找到标题后滚到按钮并再次确认。最多查找 60 秒，失败后才进入刷新恢复。

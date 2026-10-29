@@ -2,6 +2,8 @@
 
 ## 已完成
 
+- v2.2 启动导航隔离测试：非 Mining 路径跳转、Mining 及尾斜杠路径保持原地、元数据只匹配 Bull Gems 域名。运行 `node --test tests/navigation.test.cjs`。
+
 - 在实际已登录的 Mining 页面读取 DOM，确认 Greenstone Quarry 和 Crystal Cavern 同时存在 Deploy 按钮。
 - 通过 Greenstone Quarry 标题限定按钮，打开部署弹窗并成功点击 Deploy miner；任务数增加、能量减少。
 - 实际点击 Collect Rewards 后，完成任务消失，奖励余额增加。
@@ -12,6 +14,8 @@
 这些页面测试由浏览器操作完成，不等于最新版用户脚本完整循环已经通过测试。页面测试时浏览器安装版本为 v1.8；后续修改基于已观察的结构与需求实现。
 
 ## 尚待验证
+
+- v2.2 的整站匹配授权、非 Mining 首次跳转和站内无刷新导航返回，尚未进行浏览器实测。
 
 - v2.1 在 Tampermonkey 中安装后，完整连续部署、能量等待、多个奖励逐个领取的自动循环。
 - 刷新后慢加载、滚动触发加载、60 秒查找超时恢复。

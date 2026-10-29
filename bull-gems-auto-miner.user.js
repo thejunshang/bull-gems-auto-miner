@@ -5,9 +5,9 @@
 // @supportURL   https://github.com/thejunshang/bull-gems-auto-miner/issues
 // @downloadURL  https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
 // @updateURL    https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
-// @version      2.1.0
+// @version      2.2.0
 // @description  滚动等待矿场加载，连续部署至能量不足，逐个领取奖励，异常刷新恢复。
-// @match        https://gem.bullshot.io/mining*
+// @match        https://gem.bullshot.io/*
 // @grant        none
 // @run-at       document-idle
 // @noframes
@@ -15,6 +15,15 @@
 
 (() => {
   'use strict';
+  const MINING_URL = 'https://gem.bullshot.io/mining';
+  const onMining = () => location.pathname.replace(/\/$/, '') === '/mining';
+  function redirectToMining() {
+    if (onMining()) return false;
+    location.replace(MINING_URL);
+    return true;
+  }
+  // Scope stays on Bull Gems; never redirect unrelated browsing tabs.
+  if (redirectToMining()) return;
   let intervalMinutes = 10;
   try { intervalMinutes = Number(localStorage.getItem('bull-gems-wait-minutes')) || 10; } catch (_) {}
   if (intervalMinutes < 0.1 || intervalMinutes > 1440) intervalMinutes = 10;
@@ -32,7 +41,7 @@
   const panel = document.createElement('div');
   panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#101710;color:#fff;border:1px solid #baff31;border-radius:12px;padding:14px;font:14px/1.6 sans-serif;box-shadow:0 3px 20px #0008;width:250px';
   const title = document.createElement('strong');
-  title.textContent = 'Bull Gems 自动部署 v2.1';
+  title.textContent = 'Bull Gems 自动部署 v2.2';
   const status = document.createElement('div');
   const countdown = document.createElement('div');
   const settings = document.createElement('div');
@@ -281,6 +290,8 @@
   toggle.addEventListener('click', () => setEnabled(!enabled));
   let wasMiningPage = location.pathname.replace(/\/$/, '') === '/mining';
   setInterval(() => {
+    // Also handle client-side navigation without requiring a full page load.
+    if (redirectToMining()) return;
     const onMiningPage = location.pathname.replace(/\/$/, '') === '/mining';
     if (enabled && onMiningPage && !wasMiningPage) next = Date.now();
     wasMiningPage = onMiningPage;
