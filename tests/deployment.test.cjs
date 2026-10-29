@@ -30,12 +30,13 @@ async function simulate(results, retryAt = 0, level = 5) {
   const calls = [], errors = [];
   const context = vm.createContext({enabled:true,recovering:false,busy:false,collecting:false,
     generation:1,waitingEnergy:false,next:0,intervalMinutes:10,onMining:()=>true,
-    state:{mines:retryAt ? {'Crystal Cavern':{retryAt,shopAt:0,power:0}} : {},shop:null,next:0},persist(){},
+    MINES:mines,state:{mines:retryAt ? {'Crystal Cavern':{retryAt,shopAt:0,power:0}} : {},shop:null,next:0},persist(){},
     loadMineCatalogue:async()=>true,unlockedMines:()=>mines.filter(m=>m.level<=level),
     findButton:()=>[],usable:()=>true,document:{body:{innerText:''}},
     active:()=>true,interval:()=>600000,Date,Math,console,message:()=>{},sleep:async()=>{},
     recover:r=>errors.push(r),attemptMine:async(id,mine)=>{calls.push(mine); return results[calls.length-1];}});
   vm.runInContext(runSource, context);
+  vm.runInContext(source.slice(source.indexOf('  function blockedUntil('),source.indexOf('  async function attemptMine(')),context);
   await context.run();
   return {calls,errors,context};
 }
@@ -91,3 +92,33 @@ for (const mine of mines.filter(m=>m.level>1)) {
     assert.ok(r.context.state.mines[mine.name].shopAt>=before+mine.minutes*60000);
   });
 }
+test('repeated 4-6 second deployment rounds never revisit Crystal before its deadline',async()=>{
+  const r=await simulate([{kind:'blocked',requiredPower:25,reason:'矿力不足'},{kind:'success'},{kind:'success'},{kind:'success'}]);
+  const original=r.context.state.mines['Crystal Cavern'].retryAt;
+  r.context.Date={now:()=>original-29*60000};
+  await r.context.run();
+  r.context.state=JSON.parse(JSON.stringify(r.context.state)); // Rehydrate persisted scheduling state.
+  r.context.Date={now:()=>original-1000};
+  await r.context.run();
+  assert.deepEqual(r.calls,['Crystal Cavern','Greenstone Quarry','Greenstone Quarry','Greenstone Quarry']);
+  assert.equal(r.context.state.mines['Crystal Cavern'].retryAt,original);
+});
+test('action-level guard rejects a cooling mine before touching any DOM',async()=>{
+  const c=vm.createContext({MINES:mines,state:{mines:{'Crystal Cavern':{retryAt:Date.now()+1800000}}},Date});
+  vm.runInContext(source.slice(source.indexOf('  function blockedUntil('),source.indexOf('  async function run()')),c);
+  assert.equal((await c.attemptMine(1,'Crystal Cavern')).kind,'cooldown');
+});
+test('persisted fallback lock also blocks higher mine if retry entry is lost',async()=>{
+  const c=vm.createContext({MINES:mines,state:{mines:{},fallback:{mine:'Greenstone Quarry',source:'Crystal Cavern',until:Date.now()+1800000}},Date});
+  vm.runInContext(source.slice(source.indexOf('  function blockedUntil('),source.indexOf('  async function run()')),c);
+  assert.equal((await c.attemptMine(1,'Crystal Cavern')).kind,'cooldown');
+});
+test('fallback catalogue loading never scrolls or scans higher mine cards',async()=>{
+  const reads=[];
+  const c=vm.createContext({MINES:mines,Date,state:{fallback:{mine:'Greenstone Quarry',until:Date.now()+1800000}},
+    active:()=>true,onMining:()=>true,message(){},document:{readyState:'complete'},
+    cardFor:name=>{reads.push(name);return {};}});
+  vm.runInContext(source.slice(source.indexOf('  async function loadMineCatalogue('),source.indexOf('  function dueUpgrade(')),c);
+  assert.equal(await c.loadMineCatalogue(1),true);
+  assert.deepEqual(reads,['Greenstone Quarry']);
+});

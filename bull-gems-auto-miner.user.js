@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/thejunshang/bull-gems-auto-miner/issues
 // @downloadURL  https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
 // @updateURL    https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
-// @version      3.0.0
+// @version      3.0.1
 // @description  优先领取、高级矿区部署、按矿区时长自动检查商店升级，串行操作与异常恢复。
 // @match        https://gem.bullshot.io/*
 // @grant        none
@@ -27,7 +27,7 @@
     {name:'Greenstone Quarry',minutes:10,level:1}
   ];
   const EQUIPMENT = ['Iron Pickaxe','Iron Drill','Copper Turbo Drill','Ruby Laser','Cryo Plasma Drill','Void Annihilator'];
-  let state = {mines:{},shop:null,next:0};
+  let state = {mines:{},shop:null,next:0,fallback:null};
   try {
     const saved = JSON.parse(localStorage.getItem(STATE_KEY) || 'null');
     if (saved && typeof saved === 'object' && saved.mines && typeof saved.mines === 'object') state = {...state,...saved};
@@ -72,7 +72,7 @@
   const panel = document.createElement('div');
   panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#101710;color:#fff;border:1px solid #baff31;border-radius:12px;padding:14px;font:14px/1.6 sans-serif;box-shadow:0 3px 20px #0008;width:250px';
   const title = document.createElement('strong');
-  title.textContent = 'Bull Gems 自动挖矿与升级 v3.0';
+  title.textContent = 'Bull Gems 自动挖矿与升级 v3.0.1';
   const status = document.createElement('div');
   const countdown = document.createElement('div');
   const settings = document.createElement('div');
@@ -147,7 +147,10 @@
     let scan = 0;
     message('滚动加载矿区列表并检查解锁状态…');
     while (active(id) && onMining() && Date.now() < deadline) {
-      if (document.readyState !== 'loading' && MINES.every(m => cardFor(m.name, 'h2'))) return true;
+      const fallback = state.fallback?.until > Date.now() ? state.fallback : null;
+      // During fallback, never rescan/scroll through higher mine sections every few seconds.
+      const loaded = fallback ? cardFor(fallback.mine,'h2') : MINES.every(m => cardFor(m.name,'h2'));
+      if (document.readyState !== 'loading' && loaded) return true;
       const root = document.scrollingElement || document.documentElement;
       const max = Math.max(0, root.scrollHeight - innerHeight);
       scan = scan >= max ? 0 : Math.min(max, scan + Math.max(400,innerHeight * 0.7));
@@ -268,7 +271,21 @@
     if (/need|require|insufficient|locked/i.test(text.split('Possible rewards').pop()) && !enabledButton) return {kind:'blocked', reason:'部署条件不足'};
     return {kind:enabledButton ? 'ready' : 'pending'};
   }
+  function blockedUntil(name, now = Date.now()) {
+    let until = Number(state.mines[name]?.retryAt) || 0;
+    const fallback = state.fallback;
+    const index = MINES.findIndex(m => m.name === name);
+    const fallbackIndex = MINES.findIndex(m => m.name === fallback?.mine);
+    if (index >= 0 && fallbackIndex >= 0 && index < fallbackIndex && fallback.until > now) until = Math.max(until,fallback.until);
+    return until;
+  }
+  function selectMines(unlocked, now = Date.now()) {
+    return unlocked.filter(m => blockedUntil(m.name,now) <= now);
+  }
   async function attemptMine(id, mine) {
+    // Enforce the cooldown at the action boundary too, before any scroll or click.
+    const until = blockedUntil(mine);
+    if (until > Date.now()) return {kind:'cooldown',until};
     currentMine = mine;
     if (!deployDialog()) {
       if ([...document.querySelectorAll('[role="dialog"]')].some(visible)) return {kind:'error', reason:'存在其他弹窗，请关闭后重试'};
@@ -319,26 +336,29 @@
       if (!active(id)) return;
       const unlocked = unlockedMines();
       if (!unlocked.length) { recover('没有找到可识别的已解锁矿区'); return; }
-      const mines = unlocked.filter(m => !state.mines[m.name] || Date.now() >= state.mines[m.name].retryAt);
+      const mines = selectMines(unlocked);
       if (!mines.length) {
-        next = Math.min(...unlocked.map(m => state.mines[m.name].retryAt));
+        next = Math.min(...unlocked.map(m => blockedUntil(m.name)));
         message('矿区冷却中，等待下一次检查'); return;
       }
       for (const mine of mines) {
         const result = await attemptMine(id, mine.name);
         if (!active(id) || result.kind === 'cancelled') return;
+        if (result.kind === 'cooldown') continue;
         if (result.kind === 'error') { recover(result.reason); return; }
         if (result.kind === 'success') {
           delete state.mines[mine.name];
           waitingEnergy = false;
           next = Date.now() + 4000 + Math.random() * 2000;
-          message(`${mine.name} 部署成功，停顿4～6秒后继续`);
+          message(`${mine.name} 部署成功，4～6秒后仅继续检查允许部署的矿区；高级矿区等待时间不变`);
           return;
         }
         const powerShortage = result.kind === 'blocked' && result.requiredPower > 0;
         if (mine !== unlocked[unlocked.length - 1] || powerShortage) {
           const at = Date.now() + mine.minutes * 60000;
           state.mines[mine.name] = {retryAt:at,shopAt:powerShortage ? at : 0,power:result.requiredPower || 0};
+          const lower = unlocked[unlocked.indexOf(mine)+1];
+          if (lower) state.fallback = {mine:lower.name,until:at,source:mine.name};
           persist();
           message(`${mine.name} ${result.reason || '能量不足'}，${mine.minutes}分钟后${powerShortage ? '检查商店升级' : '再检查'}；期间尝试低级矿区`);
           await sleep(800);
@@ -434,6 +454,10 @@
         blocked.shopAt = blocked.retryAt = Date.now()+mine.minutes*60000;
       }
     }
+    const stillBlocked = state.mines[target];
+    const lower = MINES[MINES.findIndex(m => m.name === target)+1];
+    if (stillBlocked && lower) state.fallback = {mine:lower.name,until:stillBlocked.retryAt,source:target};
+    else if (state.fallback?.source === target) state.fallback = null;
     state.shop = null;
     state.next = 0;
     persist();
@@ -509,6 +533,8 @@
       const pending = Object.entries(state.mines).filter(([,v]) => v.shopAt > Date.now()).sort((a,b)=>a[1].shopAt-b[1].shopAt)[0];
       countdown.textContent = collecting ? '正在逐个领取…' : busy ? '正在处理页面…' : `下次部署检查：${Math.floor(remaining/60)}分${remaining%60}秒`;
       if (pending) countdown.textContent += `；${pending[0]} 商店检查：${Math.ceil((pending[1].shopAt-Date.now())/60000)}分钟后`;
+      const fallback = state.fallback;
+      if (fallback?.until > Date.now()) countdown.textContent += `；回退 ${fallback.mine}，${fallback.source} 还需等待${Math.ceil((fallback.until-Date.now())/60000)}分钟`;
       if (busy || collecting) return;
       // Claim one ready reward before any shop visit or deployment; drilling positions do not block.
       if (findButton('collect rewards').some(usable) || findButton('collect').some(usable)) {

@@ -41,3 +41,13 @@ test('single purchase is confirmed only by owned, debit and PWR increase togethe
   assert.equal(ctx.purchaseConfirmed(p,{owned:true},{balance:2223.4,power:10}),false);
   assert.equal(ctx.purchaseConfirmed(p,{owned:true},{balance:1873.4,power:4}),false);
 });
+test('unsuccessful upgrade extends fallback lock instead of immediately retrying Crystal',()=>{
+  const before=Date.now();
+  const minelist=[{name:'Crystal Cavern',minutes:30},{name:'Greenstone Quarry',minutes:10}];
+  const c=vm.createContext({MINES:minelist,Date,state:{shop:{mine:'Crystal Cavern'},mines:{'Crystal Cavern':{retryAt:before-1,shopAt:before-1,power:25}}},
+    persist(){},message(){},MINING_URL:'mining',location:{assign(){}}});
+  vm.runInContext(source.slice(source.indexOf('  function finishShop('),source.indexOf('  async function runShop(')),c);
+  c.finishShop({power:10});
+  assert.equal(c.state.fallback.mine,'Greenstone Quarry');
+  assert.ok(c.state.fallback.until>=before+1800000);
+});
