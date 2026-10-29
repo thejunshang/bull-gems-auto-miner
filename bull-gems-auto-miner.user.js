@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/thejunshang/bull-gems-auto-miner/issues
 // @downloadURL  https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
 // @updateURL    https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
-// @version      2.2.0
+// @version      2.3.0
 // @description  滚动等待矿场加载，连续部署至能量不足，逐个领取奖励，异常刷新恢复。
 // @match        https://gem.bullshot.io/*
 // @grant        none
@@ -41,7 +41,7 @@
   const panel = document.createElement('div');
   panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#101710;color:#fff;border:1px solid #baff31;border-radius:12px;padding:14px;font:14px/1.6 sans-serif;box-shadow:0 3px 20px #0008;width:250px';
   const title = document.createElement('strong');
-  title.textContent = 'Bull Gems 自动部署 v2.2';
+  title.textContent = 'Bull Gems 自动部署 v2.3';
   const status = document.createElement('div');
   const countdown = document.createElement('div');
   const settings = document.createElement('div');
@@ -95,39 +95,40 @@
       else recovering = false;
     }, delay);
   }
+  let currentMine = 'Crystal Cavern';
   const deployDialog = () => [...document.querySelectorAll('[role="dialog"]')].find(el => visible(el) &&
-    [...el.querySelectorAll('h2')].some(h => h.textContent.trim() === 'Deploy to Greenstone Quarry'));
+    [...el.querySelectorAll('h2')].some(h => h.textContent.trim() === `Deploy to ${currentMine}`));
   const closeDeployDialog = () => deployDialog()?.querySelector('button[aria-label="Close"]')?.click();
-  const greenstoneDeploy = () => findButton('deploy').filter(usable).filter(button => {
+  const mineDeploy = () => findButton('deploy').filter(usable).filter(button => {
     for (let node = button.parentElement; node && node !== document.body; node = node.parentElement) {
       const headings = [...node.querySelectorAll('h2')];
-      if (headings.length) return headings.length === 1 && headings[0].textContent.trim() === 'Greenstone Quarry';
+      if (headings.length) return headings.length === 1 && headings[0].textContent.trim() === currentMine;
     }
     return false;
   });
-  async function waitForGreenstone(id) {
+  async function waitForMine(id) {
     const deadline = Date.now() + 60000;
     let lastJump = 0, scanTop = 0;
-    message('等待页面初始化，并滚动加载 Greenstone Quarry…');
+    message(`等待页面初始化，并滚动加载 ${currentMine}…`);
     while (active(id) && Date.now() < deadline) {
       if (document.readyState === 'loading') { await sleep(500); continue; }
       const heading = [...document.querySelectorAll('h2')].find(el =>
-        visible(el) && el.textContent.trim() === 'Greenstone Quarry' && !el.closest('[role="dialog"]'));
+        visible(el) && el.textContent.trim() === currentMine && !el.closest('[role="dialog"]'));
       if (heading) {
         heading.scrollIntoView({behavior:'smooth', block:'center'});
         await sleep(1200);
         if (!active(id)) return [];
-        const buttons = greenstoneDeploy();
+        const buttons = mineDeploy();
         if (buttons.length === 1) {
           buttons[0].scrollIntoView({behavior:'smooth', block:'center'});
           await sleep(800);
           if (!active(id)) return [];
-          const current = greenstoneDeploy();
+          const current = mineDeploy();
           if (current.length === 1) return current;
         }
       } else {
         const jump = [...document.querySelectorAll('button')].find(el =>
-          visible(el) && usable(el) && el.getAttribute('aria-label') === 'Jump to Greenstone Quarry');
+          visible(el) && usable(el) && el.getAttribute('aria-label') === `Jump to ${currentMine}`);
         if (jump && Date.now() - lastJump > 10000) {
           jump.click(); lastJump = Date.now();
         } else {
@@ -211,65 +212,76 @@
     if (enabled) next = Date.now() + interval();
     message(`等待时间已更新为${value}分钟，从现在重新计时`);
   });
+  function deploymentStatus(text, enabledButton) {
+    const energy = text.match(/Need\s+(\d+(?:\.\d+)?)\s+more\s+energy/i);
+    const power = text.match(/Mining power req\.\s*([\d.]+)\s*\/\s*([\d.]+)\s*PWR/i);
+    if (power && Number(power[1]) > Number(power[2])) return {kind:'blocked', reason:'矿力不足'};
+    if (energy) return {kind:'energy', minutes:Number(energy[1])};
+    if (/need|require|insufficient|locked/i.test(text.split('Possible rewards').pop()) && !enabledButton) return {kind:'blocked', reason:'部署条件不足'};
+    return {kind:enabledButton ? 'ready' : 'pending'};
+  }
+  async function attemptMine(id, mine) {
+    currentMine = mine;
+    if (!deployDialog()) {
+      if ([...document.querySelectorAll('[role="dialog"]')].some(visible)) return {kind:'error', reason:'存在其他弹窗，请关闭后重试'};
+      const buttons = await waitForMine(id);
+      if (!active(id)) return {kind:'cancelled'};
+      if (buttons.length !== 1) return {kind:'error', reason:`未找到唯一的 ${mine} Deploy`};
+      buttons[0].click();
+      message(`已点击 ${mine} Deploy，等待弹窗…`);
+    }
+    const deadline = Date.now() + 15000;
+    while (active(id) && Date.now() < deadline) {
+      const dialog = deployDialog();
+      if (!dialog) { await sleep(300); continue; }
+      const miners = findButton('deploy miner').filter(el => usable(el) && dialog.contains(el));
+      const result = deploymentStatus(dialog.innerText, miners.length === 1);
+      if (result.kind === 'energy' || result.kind === 'blocked') {
+        closeDeployDialog();
+        const closeDeadline = Date.now() + 5000;
+        while (active(id) && deployDialog() && Date.now() < closeDeadline) await sleep(200);
+        if (deployDialog()) return {kind:'error', reason:`${mine} 弹窗无法关闭`};
+        return result;
+      }
+      if (result.kind === 'ready') {
+        if (!active(id)) return {kind:'cancelled'};
+        miners[0].click();
+        message(`已点击 ${mine} Deploy miner，确认部署结果…`);
+        const confirmDeadline = Date.now() + 30000;
+        while (active(id) && deployDialog() && Date.now() < confirmDeadline) await sleep(400);
+        if (!active(id)) return {kind:'cancelled'};
+        return deployDialog() ? {kind:'error', reason:`${mine} 部署弹窗30秒内未关闭`} : {kind:'success'};
+      }
+      await sleep(300);
+    }
+    return active(id) ? {kind:'error', reason:`${mine} 未显示可识别的部署状态`} : {kind:'cancelled'};
+  }
   async function run() {
-    if (!enabled || recovering || busy || collecting || location.pathname.replace(/\/$/, '') !== '/mining') return;
+    if (!enabled || recovering || busy || collecting || !onMining()) return;
     busy = true;
     const id = generation;
     next = Date.now() + interval();
     try {
-      if (!findButton('deploy miner').length && !energyButton()) {
-        const buttons = await waitForGreenstone(id);
-        if (!active(id)) return;
-        if (buttons.length !== 1) {
-          recover(buttons.length ? 'Greenstone Quarry 的 Deploy 不唯一' : '未找到 Greenstone Quarry 的 Deploy');
-          return;
-        }
-        if (!active(id)) return;
-        buttons[0].scrollIntoView({behavior:'smooth', block:'center'});
-        await sleep(700);
-        if (!active(id)) return;
-        buttons[0].click();
-        message('已点击 Deploy，等待弹窗…');
-      }
-      const deadline = Date.now() + 15000;
-      while (active(id) && Date.now() < deadline) {
-        const miners = findButton('deploy miner').filter(el => usable(el) && deployDialog()?.contains(el));
-        if (miners.length === 1) {
-          // Recheck immediately before the second click so Stop cancels pending work.
-          if (!active(id)) return;
-          miners[0].click();
+      for (const mine of ['Crystal Cavern', 'Greenstone Quarry']) {
+        const result = await attemptMine(id, mine);
+        if (!active(id) || result.kind === 'cancelled') return;
+        if (result.kind === 'error') { recover(result.reason); return; }
+        if (result.kind === 'success') {
           waitingEnergy = false;
-          next = Date.now() + interval();
-          message('已点击 Deploy miner，确认部署结果…');
-          const confirmDeadline = Date.now() + 30000;
-          while (active(id) && deployDialog() && Date.now() < confirmDeadline) await sleep(400);
+          next = Date.now() + 4000 + Math.random() * 2000;
+          message(`${mine} 部署成功，停顿4～6秒后继续优先检查 Crystal Cavern`);
+          return;
+        }
+        if (mine === 'Crystal Cavern') {
+          message('Crystal Cavern 条件不足，改为尝试 Greenstone Quarry');
+          await sleep(800);
           if (!active(id)) return;
-          if (deployDialog()) {
-            recover('部署弹窗30秒内未关闭');
-          } else {
-            next = Date.now() + 4000 + Math.random() * 2000;
-            message('部署成功，停顿4～6秒后继续部署，直到能量不足');
-          }
-          return;
+          continue;
         }
-        const energy = energyButton();
-        if (energy) {
-          waitingEnergy = true;
-          const missing = (energy.textContent || '').match(/need\s+(\d+(?:\.\d+)?)\s+more\s+energy/i);
-          if (missing && Number(missing[1]) > 0) {
-            const minutes = Number(missing[1]);
-            next = Date.now() + minutes * 60 * 1000;
-            message(`还缺${minutes}点能量，按${minutes}分钟等待；可手动更新`);
-          } else {
-            message('能量不足，等待恢复；可更新等待时间');
-          }
-          closeDeployDialog();
-          return;
-        }
-        waitingEnergy = false;
-        await sleep(300);
+        waitingEnergy = result.kind === 'energy';
+        if (waitingEnergy && result.minutes > 0) next = Date.now() + result.minutes * 60000;
+        message(waitingEnergy ? `两个矿场均不可部署，Greenstone Quarry 还缺${result.minutes}点能量，按${result.minutes}分钟等待` : `两个矿场均不满足条件，${intervalMinutes}分钟后重新检查`);
       }
-      if (active(id)) recover('未找到可用的 Deploy miner 或能量提示');
     } catch (error) {
       console.error('[Auto Deploy]', error);
       if (active(id)) recover('部署出现错误');
