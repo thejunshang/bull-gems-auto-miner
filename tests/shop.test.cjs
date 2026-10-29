@@ -51,3 +51,16 @@ test('unsuccessful upgrade extends fallback lock instead of immediately retrying
   assert.equal(c.state.fallback.mine,'Greenstone Quarry');
   assert.ok(c.state.fallback.until>=before+1800000);
 });
+for (const power of [10,25]) {
+  test(`early shop visit with ${power} PWR neither clears nor postpones Crystal cooldown`,()=>{
+    const until=Date.now()+1800000;
+    const c=vm.createContext({MINES:[{name:'Crystal Cavern',minutes:30},{name:'Greenstone Quarry',minutes:10}],Date,
+      state:{shop:{mine:'Crystal Cavern'},mines:{'Crystal Cavern':{retryAt:until,shopAt:until,power:25}},next:0},
+      persist(){},message(){},MINING_URL:'mining',location:{assign(){}}});
+    vm.runInContext(source.slice(source.indexOf('  function finishShop('),source.indexOf('  async function runShop(')),c);
+    c.finishShop({power});
+    assert.equal(c.state.mines['Crystal Cavern'].retryAt,until);
+    assert.equal(c.state.fallback.until,until);
+    assert.equal(c.state.phase,'deploy');
+  });
+}

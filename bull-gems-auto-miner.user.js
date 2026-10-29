@@ -5,8 +5,8 @@
 // @supportURL   https://github.com/thejunshang/bull-gems-auto-miner/issues
 // @downloadURL  https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
 // @updateURL    https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
-// @version      3.0.2
-// @description  优先领取、高级矿区部署、按矿区时长自动检查商店升级，串行操作与异常恢复。
+// @version      3.1.0
+// @description  优先领取、检查商店购买矿力装备、部署允许的最高级矿区，串行操作与异常恢复。
 // @match        https://gem.bullshot.io/*
 // @grant        none
 // @run-at       document-idle
@@ -27,11 +27,12 @@
     {name:'Greenstone Quarry',minutes:10,level:1}
   ];
   const EQUIPMENT = ['Iron Pickaxe','Iron Drill','Copper Turbo Drill','Ruby Laser','Cryo Plasma Drill','Void Annihilator'];
-  let state = {mines:{},shop:null,next:0,fallback:null};
+  let state = {mines:{},shop:null,next:0,fallback:null,phase:'shop',shopRequested:false};
   try {
     const saved = JSON.parse(localStorage.getItem(STATE_KEY) || 'null');
     if (saved && typeof saved === 'object' && saved.mines && typeof saved.mines === 'object') state = {...state,...saved};
     if (state.shop && !MINES.some(m => m.name === state.shop.mine)) state.shop = null;
+    if (!['shop','deploy'].includes(state.phase)) state.phase = 'shop';
   } catch (_) {}
   const persist = () => { localStorage.setItem(STATE_KEY, JSON.stringify(state)); };
   const onShop = () => location.pathname.replace(/\/$/, '') === '/trade';
@@ -72,7 +73,7 @@
   const panel = document.createElement('div');
   panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#101710;color:#fff;border:1px solid #baff31;border-radius:12px;padding:14px;font:14px/1.6 sans-serif;box-shadow:0 3px 20px #0008;width:250px';
   const title = document.createElement('strong');
-  title.textContent = 'Bull Gems 自动挖矿与升级 v3.0.2';
+  title.textContent = 'Bull Gems 自动挖矿与升级 v3.1';
   const status = document.createElement('div');
   const countdown = document.createElement('div');
   const settings = document.createElement('div');
@@ -165,12 +166,15 @@
   function dueUpgrade(mines, now = Date.now()) {
     return MINES.find(m => mines[m.name]?.shopAt > 0 && mines[m.name].shopAt <= now);
   }
-  function startShop(mine) {
-    state.shop = {mine:mine.name,startedAt:Date.now(),pending:null};
+  function startShop(mine = null) {
+    const target = mine || MINES.find(m => state.mines[m.name]?.power > 0) || MINES[MINES.length-1];
+    state.shop = {mine:target.name,startedAt:Date.now(),pending:null};
+    state.phase = 'shop';
+    state.shopRequested = false;
     state.next = next;
     persist();
     busy = true;
-    message(`升级检查到期，前往商店（${mine.name}）`);
+    message('领取处理完成，先检查商店装备，再进行部署');
     location.assign(SHOP_URL);
   }
   async function waitForMine(id) {
@@ -246,6 +250,9 @@
         return;
       }
       collectAttempts.delete(button);
+      state.phase = 'shop';
+      state.shopRequested = true;
+      persist();
       const pause = 2500 + Math.random() * 3000;
       message(`已确认任务从卡片移除，停顿${(pause / 1000).toFixed(1)}秒后领取下一个`);
       await sleep(pause);
@@ -368,7 +375,7 @@
           const lower = unlocked[unlocked.indexOf(mine)+1];
           if (lower) state.fallback = {mine:lower.name,until:at,source:mine.name};
           persist();
-          message(`${mine.name} ${result.reason || '能量不足'}，${mine.minutes}分钟后${powerShortage ? '检查商店升级' : '再检查'}；期间尝试低级矿区`);
+          message(`${mine.name} ${result.reason || '能量不足'}，${mine.minutes}分钟后再检查该矿区；期间尝试低级矿区，商店按每轮优先检查`);
           await sleep(800);
           if (!active(id)) return;
           continue;
@@ -387,6 +394,7 @@
       console.error('[Auto Deploy]', error);
       if (active(id)) recover('部署出现错误');
     } finally {
+      state.phase = 'shop'; // A new deployment round must check the shop first.
       state.next = next;
       try { persist(); } catch (error) { console.error('[Auto Deploy] 无法保存调度状态', error); }
       busy = false;
@@ -463,8 +471,8 @@
     for (const mine of MINES) {
       const blocked = state.mines[mine.name];
       if (!blocked?.shopAt) continue;
-      if (account.power >= blocked.power) delete state.mines[mine.name];
-      else if (mine.name === target || blocked.shopAt <= Date.now()) {
+      if (account.power >= blocked.power && blocked.retryAt <= Date.now()) delete state.mines[mine.name];
+      else if (account.power < blocked.power && blocked.shopAt <= Date.now()) {
         blocked.shopAt = blocked.retryAt = Date.now()+mine.minutes*60000;
       }
     }
@@ -473,10 +481,11 @@
     if (stillBlocked && lower) state.fallback = {mine:lower.name,until:stillBlocked.retryAt,source:target};
     else if (state.fallback?.source === target) state.fallback = null;
     state.shop = null;
-    state.next = 0;
-    state.waitReason = 'ready';
+    state.phase = 'deploy'; // Persist across navigation; do not reopen the shop before deployment.
+    state.shopRequested = false;
+    // A reward-triggered shop visit must not cancel an already-confirmed energy/manual wait.
     persist();
-    message('商店检查完成，返回 Mining');
+    message('商店检查完成，返回 Mining 进入部署步骤');
     location.assign(MINING_URL);
   }
   async function runShop() {
@@ -532,6 +541,12 @@
     toggle.textContent = value ? '停止自动部署' : '开始（立即执行一次）';
     message(value ? '自动部署已开启' : '已停止');
     next = value ? (restoring ? restoredDeploymentTime(state) : Date.now()) : 0;
+    if (value && !restoring) {
+      state.phase = 'shop';
+      state.shopRequested = true;
+      state.next = next;
+      try { persist(); } catch (_) {}
+    }
   }
   toggle.addEventListener('click', () => setEnabled(!enabled));
   async function closeRewardObstruction() {
@@ -555,7 +570,7 @@
       const remaining = Math.max(0,Math.ceil((next-Date.now())/1000));
       const pending = Object.entries(state.mines).filter(([,v]) => v.shopAt > Date.now()).sort((a,b)=>a[1].shopAt-b[1].shopAt)[0];
       countdown.textContent = collecting ? '正在逐个领取…' : busy ? '正在处理页面…' : `下次部署检查：${Math.floor(remaining/60)}分${remaining%60}秒`;
-      if (pending) countdown.textContent += `；${pending[0]} 商店检查：${Math.ceil((pending[1].shopAt-Date.now())/60000)}分钟后`;
+      if (pending) countdown.textContent += `；${pending[0]} 冷却：${Math.ceil((pending[1].shopAt-Date.now())/60000)}分钟后到期`;
       const fallback = state.fallback;
       if (fallback?.until > Date.now()) countdown.textContent += `；回退 ${fallback.mine}，${fallback.source} 还需等待${Math.ceil((fallback.until-Date.now())/60000)}分钟`;
       if (busy || collecting) return;
@@ -565,8 +580,10 @@
         else void collectRewards();
         return;
       }
-      const due = dueUpgrade(state.mines);
-      if (due) { startShop(due); return; }
+      if (state.phase !== 'deploy') {
+        if (state.shopRequested || Date.now() >= next) startShop();
+        return;
+      }
       if (Date.now() >= next) void run();
     } catch (error) {
       console.error('[Auto Scheduler]',error);

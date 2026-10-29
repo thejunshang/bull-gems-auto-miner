@@ -127,6 +127,7 @@ test('successful fallback deployment schedules seconds instead of the default te
   const r=await simulate([{kind:'blocked',requiredPower:25},{kind:'success'}]);
   assert.ok(r.context.next>=before+4000 && r.context.next<=Date.now()+6000);
   assert.equal(r.context.state.waitReason,'success');
+  assert.equal(r.context.state.phase,'shop');
 });
 test('failed deployment never pre-saves the default ten minute interval',async()=>{
   const r=await simulate([{kind:'error',reason:'timeout'}]);

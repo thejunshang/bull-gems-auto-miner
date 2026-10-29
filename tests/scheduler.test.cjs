@@ -19,15 +19,34 @@ function scheduler(overrides={}){
 test('ready reward takes priority over due shop visit and deployment',()=>{
   assert.deepEqual(scheduler({findButton:label=>label==='collect rewards'?[{}]:[]}).calls,['claim']);
 });
-test('due shop visit takes priority over deployment',()=>assert.deepEqual(scheduler().calls,['shop']));
+test('each new round checks shop before deployment without an upgrade timer',()=>assert.deepEqual(scheduler({dueUpgrade:()=>null}).calls,['shop']));
 test('drilling positions without ready reward do not block deployment',()=>{
-  assert.deepEqual(scheduler({dueUpgrade:()=>null}).calls,['deploy']);
+  assert.deepEqual(scheduler({state:{mines:{},phase:'deploy'},dueUpgrade:()=>null}).calls,['deploy']);
 });
 test('busy purchase or deployment prevents any simultaneous action',()=>assert.deepEqual(scheduler({busy:true}).calls,[]));
 test('ongoing claim prevents shop and deployment',()=>assert.deepEqual(scheduler({collecting:true}).calls,[]));
 test('recovery blocks new clicks',()=>assert.deepEqual(scheduler({recovering:true}).calls,[]));
 test('stopped state never buys or deploys',()=>assert.deepEqual(scheduler({enabled:false}).calls,[]));
 test('shop route runs only the shop executor',()=>assert.deepEqual(scheduler({onShop:()=>true}).calls,['shopRun']));
+test('returning from shop proceeds to deployment instead of reopening shop',()=>{
+  assert.deepEqual(scheduler({state:JSON.parse(JSON.stringify({mines:{},phase:'deploy',shopRequested:false}))}).calls,['deploy']);
+});
+test('a new reward forces another shop check before deployment',()=>{
+  assert.deepEqual(scheduler({state:{mines:{},phase:'shop',shopRequested:true},next:Date.now()+600000}).calls,['shop']);
+});
+test('waiting round does not visit shop repeatedly before its next time',()=>{
+  assert.deepEqual(scheduler({state:{mines:{},phase:'shop',shopRequested:false},next:Date.now()+600000}).calls,[]);
+});
+test('shop completion preserves energy wait but advances the persistent phase',()=>{
+  const c=vm.createContext({MINES:[{name:'Greenstone Quarry',minutes:10}],Date,
+    state:{mines:{},shop:{mine:'Greenstone Quarry'},next:Date.now()+300000,waitReason:'energy'},
+    persist(){},message(){},location:{assign(){}},MINING_URL:'mining'});
+  const before=c.state.next;
+  vm.runInContext(source.slice(source.indexOf('  function finishShop('),source.indexOf('  async function runShop(')),c);
+  c.finishShop({power:10});
+  assert.equal(c.state.phase,'deploy');assert.equal(c.state.shop,null);
+  assert.equal(c.state.next,before);assert.equal(c.state.waitReason,'energy');
+});
 
 const shopSource=source.slice(source.indexOf('  async function runShop()'),source.indexOf('  function setEnabled('));
 async function shopRun(overrides={}){
