@@ -41,26 +41,13 @@ test('single purchase is confirmed only by owned, debit and PWR increase togethe
   assert.equal(ctx.purchaseConfirmed(p,{owned:true},{balance:2223.4,power:10}),false);
   assert.equal(ctx.purchaseConfirmed(p,{owned:true},{balance:1873.4,power:4}),false);
 });
-test('unsuccessful upgrade extends fallback lock instead of immediately retrying Crystal',()=>{
-  const before=Date.now();
-  const minelist=[{name:'Crystal Cavern',minutes:30},{name:'Greenstone Quarry',minutes:10}];
-  const c=vm.createContext({MINES:minelist,Date,state:{shop:{mine:'Crystal Cavern'},mines:{'Crystal Cavern':{retryAt:before-1,shopAt:before-1,power:25}}},
+test('shop preserves selected mine and energy wait after PWR purchase',()=>{
+  const until=Date.now()+420000;
+  const c=vm.createContext({Date,state:{shop:{mine:'Crystal Cavern'},next:until,waitReason:'energy',targetMine:'Crystal Cavern',energyWait:{mine:'Crystal Cavern',until}},
     persist(){},message(){},MINING_URL:'mining',location:{assign(){}}});
   vm.runInContext(source.slice(source.indexOf('  function finishShop('),source.indexOf('  async function runShop(')),c);
-  c.finishShop({power:10});
-  assert.equal(c.state.fallback.mine,'Greenstone Quarry');
-  assert.ok(c.state.fallback.until>=before+1800000);
+  c.finishShop({power:25});
+  assert.equal(c.state.phase,'deploy');assert.equal(c.state.next,until);
+  assert.equal(c.state.targetMine,'Crystal Cavern');assert.equal(c.state.energyWait.until,until);
+  assert.equal(c.state.lastShopPower,25);
 });
-for (const power of [10,25]) {
-  test(`early shop visit with ${power} PWR neither clears nor postpones Crystal cooldown`,()=>{
-    const until=Date.now()+1800000;
-    const c=vm.createContext({MINES:[{name:'Crystal Cavern',minutes:30},{name:'Greenstone Quarry',minutes:10}],Date,
-      state:{shop:{mine:'Crystal Cavern'},mines:{'Crystal Cavern':{retryAt:until,shopAt:until,power:25}},next:0},
-      persist(){},message(){},MINING_URL:'mining',location:{assign(){}}});
-    vm.runInContext(source.slice(source.indexOf('  function finishShop('),source.indexOf('  async function runShop(')),c);
-    c.finishShop({power});
-    assert.equal(c.state.mines['Crystal Cavern'].retryAt,until);
-    assert.equal(c.state.fallback.until,until);
-    assert.equal(c.state.phase,'deploy');
-  });
-}

@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/thejunshang/bull-gems-auto-miner/issues
 // @downloadURL  https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
 // @updateURL    https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
-// @version      3.1.1
+// @version      3.2.0
 // @description  优先领取、检查商店购买矿力装备、部署允许的最高级矿区，串行操作与异常恢复。
 // @match        https://gem.bullshot.io/*
 // @grant        none
@@ -35,6 +35,13 @@
     if (!['shop','deploy'].includes(state.phase)) state.phase = 'shop';
   } catch (_) {}
   const persist = () => { localStorage.setItem(STATE_KEY, JSON.stringify(state)); };
+  if (state.strategy !== 'power-first') {
+    // The former duration-based fallback must not override the new PWR-first strategy.
+    state.strategy = 'power-first'; state.mines = {}; state.fallback = null;
+    state.energyWait = null; state.targetMine = null; state.next = 0;
+    state.waitReason = 'ready'; state.phase = 'shop';
+    try { persist(); } catch (_) {}
+  }
   const onShop = () => location.pathname.replace(/\/$/, '') === '/trade';
   const onMining = () => location.pathname.replace(/\/$/, '') === '/mining';
   function shopAuthorized() {
@@ -52,13 +59,6 @@
   // Scope stays on Bull Gems; never redirect unrelated browsing tabs.
   if (redirectToMining()) return;
   let intervalMinutes = 10;
-  // Carry forward a v2 Crystal cooldown without visiting the shop prematurely.
-  try {
-    const savedRetry = Number(localStorage.getItem('bull-gems-crystal-retry-at'));
-    if (!state.mines['Crystal Cavern'] && Number.isFinite(savedRetry) && savedRetry > Date.now()) {
-      state.mines['Crystal Cavern'] = {retryAt:savedRetry,shopAt:0,power:0}; persist();
-    }
-  } catch (_) {}
   try { intervalMinutes = Number(localStorage.getItem('bull-gems-wait-minutes')) || 10; } catch (_) {}
   if (intervalMinutes < 0.1 || intervalMinutes > 1440) intervalMinutes = 10;
   const interval = () => intervalMinutes * 60 * 1000;
@@ -73,7 +73,7 @@
   const panel = document.createElement('div');
   panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#101710;color:#fff;border:1px solid #baff31;border-radius:12px;padding:14px;font:14px/1.6 sans-serif;box-shadow:0 3px 20px #0008;width:250px';
   const title = document.createElement('strong');
-  title.textContent = 'Bull Gems 自动挖矿与升级 v3.1.1';
+  title.textContent = 'Bull Gems 自动挖矿与升级 v3.2';
   const status = document.createElement('div');
   const countdown = document.createElement('div');
   const settings = document.createElement('div');
@@ -151,9 +151,7 @@
     let scan = 0;
     message('滚动加载矿区列表并检查解锁状态…');
     while (active(id) && onMining() && Date.now() < deadline) {
-      const fallback = state.fallback?.until > Date.now() ? state.fallback : null;
-      // During fallback, never rescan/scroll through higher mine sections every few seconds.
-      const loaded = fallback ? cardFor(fallback.mine,'h2') : MINES.every(m => cardFor(m.name,'h2'));
+      const loaded = MINES.every(m => cardFor(m.name,'h2'));
       if (document.readyState !== 'loading' && loaded) return true;
       const root = document.scrollingElement || document.documentElement;
       const max = Math.max(0, root.scrollHeight - innerHeight);
@@ -163,11 +161,8 @@
     }
     return false;
   }
-  function dueUpgrade(mines, now = Date.now()) {
-    return MINES.find(m => mines[m.name]?.shopAt > 0 && mines[m.name].shopAt <= now);
-  }
   function startShop(mine = null) {
-    const target = mine || MINES.find(m => state.mines[m.name]?.power > 0) || MINES[MINES.length-1];
+    const target = mine || MINES.find(m => m.name === state.targetMine) || MINES[MINES.length-1];
     state.shop = {mine:target.name,startedAt:Date.now(),pending:null};
     state.phase = 'shop';
     state.shopRequested = false;
@@ -271,6 +266,7 @@
     if (enabled) next = Date.now() + interval();
     state.next = next;
     state.waitReason = 'manual';
+    state.energyWait = null; // Manual changes request a fresh check at the selected time.
     try { persist(); } catch (_) {}
     message(`等待时间已更新为${value}分钟，从现在重新计时`);
   });
@@ -282,20 +278,33 @@
     if (/need|require|insufficient|locked/i.test(text.split('Possible rewards').pop()) && !enabledButton) return {kind:'blocked', reason:'部署条件不足'};
     return {kind:enabledButton ? 'ready' : 'pending'};
   }
-  function blockedUntil(name, now = Date.now()) {
-    let until = Number(state.mines[name]?.retryAt) || 0;
-    const fallback = state.fallback;
-    const index = MINES.findIndex(m => m.name === name);
-    const fallbackIndex = MINES.findIndex(m => m.name === fallback?.mine);
-    if (index >= 0 && fallbackIndex >= 0 && index < fallbackIndex && fallback.until > now) until = Math.max(until,fallback.until);
-    return until;
+  function choosePowerMine(unlocked, power, requirements) {
+    if (!Number.isFinite(power) || power < 0) throw Error('无法识别当前 PWR');
+    for (const mine of unlocked) {
+      const required = requirements[mine.name];
+      if (!Number.isFinite(required) || required < 0) throw Error(`无法识别 ${mine.name} 的 PWR 要求`);
+      if (power >= required) return mine;
+    }
+    return null;
   }
-  function selectMines(unlocked, now = Date.now()) {
-    return unlocked.filter(m => blockedUntil(m.name,now) <= now);
+  function miningPower() {
+    const match = (document.querySelector('main')?.innerText || '').match(/Mining power\s*([\d,]+(?:\.\d+)?)/i);
+    return match ? Number(match[1].replace(/,/g,'')) : NaN;
+  }
+  function powerRequirements(unlocked) {
+    return Object.fromEntries(unlocked.map(m => {
+      const match = (cardFor(m.name,'h2')?.innerText || '').match(/Power required\s*([\d,]+(?:\.\d+)?)\s*PWR/i);
+      return [m.name,match ? Number(match[1].replace(/,/g,'')) : NaN];
+    }));
+  }
+  function targetEnergyReady() {
+    if (!state.energyWait || state.energyWait.mine !== state.targetMine) return false;
+    const available = (document.querySelector('main')?.innerText || '').match(/Available energy\s*([\d,]+(?:\.\d+)?)/i);
+    const required = (cardFor(state.targetMine,'h2')?.innerText || '').match(/Energy cost\s*([\d,]+(?:\.\d+)?)/i);
+    return Boolean(available && required && Number(available[1].replace(/,/g,'')) >= Number(required[1].replace(/,/g,'')));
   }
   async function attemptMine(id, mine) {
-    // Enforce the cooldown at the action boundary too, before any scroll or click.
-    const until = blockedUntil(mine);
+    const until = state.energyWait?.mine === mine ? state.energyWait.until : 0;
     if (until > Date.now()) return {kind:'cooldown',until};
     currentMine = mine;
     if (!deployDialog()) {
@@ -349,47 +358,37 @@
       if (!active(id)) return;
       const unlocked = unlockedMines();
       if (!unlocked.length) { recover('没有找到可识别的已解锁矿区'); return; }
-      const mines = selectMines(unlocked);
-      if (!mines.length) {
-        next = Math.min(...unlocked.map(m => blockedUntil(m.name)));
-        state.waitReason = 'cooldown';
-        message('矿区冷却中，等待下一次检查'); return;
+      const mine = choosePowerMine(unlocked,miningPower(),powerRequirements(unlocked));
+      if (!mine) {
+        next = Date.now()+interval(); state.waitReason = 'conditions';
+        message('已解锁矿区的 PWR 均不满足，等待下一轮商店检查'); return;
       }
-      for (const mine of mines) {
+      state.targetMine = mine.name;
+      if (state.energyWait?.mine !== mine.name) state.energyWait = null;
         const result = await attemptMine(id, mine.name);
         if (!active(id) || result.kind === 'cancelled') return;
-        if (result.kind === 'cooldown') continue;
+        if (result.kind === 'cooldown') {
+          next = result.until; state.waitReason = 'energy'; return;
+        }
         if (result.kind === 'error') { recover(result.reason); return; }
         if (result.kind === 'success') {
-          delete state.mines[mine.name];
+          state.energyWait = null;
           waitingEnergy = false;
           next = Date.now() + 4000 + Math.random() * 2000;
           state.waitReason = 'success';
-          message(`${mine.name} 部署成功，4～6秒后仅继续检查允许部署的矿区；高级矿区等待时间不变`);
+          message(`${mine.name} 部署成功，4～6秒后继续；不因能量不足回退低级矿区`);
           return;
-        }
-        const powerShortage = result.kind === 'blocked' && result.requiredPower > 0;
-        if (mine !== unlocked[unlocked.length - 1] || powerShortage) {
-          const at = Date.now() + mine.minutes * 60000;
-          state.mines[mine.name] = {retryAt:at,shopAt:powerShortage ? at : 0,power:result.requiredPower || 0};
-          const lower = unlocked[unlocked.indexOf(mine)+1];
-          if (lower) state.fallback = {mine:lower.name,until:at,source:mine.name};
-          persist();
-          message(`${mine.name} ${result.reason || '能量不足'}，${mine.minutes}分钟后再检查该矿区；期间尝试低级矿区，商店按每轮优先检查`);
-          await sleep(800);
-          if (!active(id)) return;
-          continue;
         }
         waitingEnergy = result.kind === 'energy';
         if (waitingEnergy && result.minutes > 0) {
           next = Date.now() + result.minutes * 60000;
           state.waitReason = 'energy';
+          state.energyWait = {mine:mine.name,until:next};
         } else {
           next = Date.now() + interval();
           state.waitReason = 'conditions';
         }
-        message(waitingEnergy ? `${mine.name} 还缺${result.minutes}点能量，按${result.minutes}分钟等待` : `${mine.name} 条件不足，${intervalMinutes}分钟后重新检查`);
-      }
+        message(waitingEnergy ? `锁定 ${mine.name}：PWR 已满足，还缺${result.minutes}点能量，按${result.minutes}分钟等待；不部署低级矿区` : `${mine.name} 页面条件发生变化，${intervalMinutes}分钟后重新检查，不在本轮降级部署`);
     } catch (error) {
       console.error('[Auto Deploy]', error);
       if (active(id)) recover('部署出现错误');
@@ -467,19 +466,7 @@
     return false;
   }
   function finishShop(account) {
-    const target = state.shop.mine;
-    for (const mine of MINES) {
-      const blocked = state.mines[mine.name];
-      if (!blocked?.shopAt) continue;
-      if (account.power >= blocked.power && blocked.retryAt <= Date.now()) delete state.mines[mine.name];
-      else if (account.power < blocked.power && blocked.shopAt <= Date.now()) {
-        blocked.shopAt = blocked.retryAt = Date.now()+mine.minutes*60000;
-      }
-    }
-    const stillBlocked = state.mines[target];
-    const lower = MINES[MINES.findIndex(m => m.name === target)+1];
-    if (stillBlocked && lower) state.fallback = {mine:lower.name,until:stillBlocked.retryAt,source:target};
-    else if (state.fallback?.source === target) state.fallback = null;
+    state.lastShopPower = account.power;
     state.shop = null;
     state.phase = 'deploy'; // Persist across navigation; do not reopen the shop before deployment.
     state.shopRequested = false;
@@ -578,17 +565,19 @@
       if (recovering) { countdown.textContent = '等待自动刷新恢复（停止可取消）'; return; }
       if (onShop()) { if (!busy) void runShop(); return; }
       const remaining = Math.max(0,Math.ceil((next-Date.now())/1000));
-      const pending = Object.entries(state.mines).filter(([,v]) => v.shopAt > Date.now()).sort((a,b)=>a[1].shopAt-b[1].shopAt)[0];
       countdown.textContent = collecting ? '正在逐个领取…' : busy ? '正在处理页面…' : `下次部署检查：${Math.floor(remaining/60)}分${remaining%60}秒`;
-      if (pending) countdown.textContent += `；${pending[0]} 冷却：${Math.ceil((pending[1].shopAt-Date.now())/60000)}分钟后到期`;
-      const fallback = state.fallback;
-      if (fallback?.until > Date.now()) countdown.textContent += `；回退 ${fallback.mine}，${fallback.source} 还需等待${Math.ceil((fallback.until-Date.now())/60000)}分钟`;
+      if (state.targetMine) countdown.textContent += `；目标：${state.targetMine}`;
+      if (state.energyWait?.until > Date.now()) countdown.textContent += '（等待能量，不降级）';
       if (busy || collecting) return;
       // Claim one ready reward before any shop visit or deployment; drilling positions do not block.
       if (findButton('collect rewards').some(usable) || findButton('collect').some(usable)) {
         if ([...document.querySelectorAll('[role="dialog"]')].some(visible)) void closeRewardObstruction();
         else void collectRewards();
         return;
+      }
+      if (targetEnergyReady()) {
+        state.energyWait = null; next = Date.now(); state.next = next;
+        state.waitReason = 'ready'; state.phase = 'shop'; persist();
       }
       if (state.phase !== 'deploy') {
         if (state.shopRequested || Date.now() >= next) startShop();

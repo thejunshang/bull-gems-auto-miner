@@ -10,7 +10,7 @@ function scheduler(overrides={}){
   const calls=[];
   const c=vm.createContext({Date,Math,console,enabled:true,busy:false,collecting:false,recovering:false,next:0,intervalMinutes:10,
     state:{mines:{}},countdown:{textContent:''},redirectToMining:()=>false,onShop:()=>false,
-    findButton:()=>[],usable:()=>true,visible:()=>true,document:{querySelectorAll:()=>[]},dueUpgrade:()=>({name:'Crystal Cavern'}),
+    findButton:()=>[],usable:()=>true,visible:()=>true,document:{querySelectorAll:()=>[]},targetEnergyReady:()=>false,dueUpgrade:()=>({name:'Crystal Cavern'}),
     startShop:()=>calls.push('shop'),collectRewards:()=>calls.push('claim'),run:()=>calls.push('deploy'),runShop:()=>calls.push('shopRun'),
     closeRewardObstruction:()=>calls.push('close'),recover:()=>calls.push('recover'),
     setInterval:f=>{c.tick=f;},...overrides});
@@ -36,6 +36,12 @@ test('a new reward forces another shop check before deployment',()=>{
 });
 test('waiting round does not visit shop repeatedly before its next time',()=>{
   assert.deepEqual(scheduler({state:{mines:{},phase:'shop',shopRequested:false},next:Date.now()+600000}).calls,[]);
+});
+test('target energy reaching cost wakes the waiting round without selecting a lower mine',()=>{
+  const r=scheduler({state:{mines:{},phase:'shop',targetMine:'Crystal Cavern',energyWait:{mine:'Crystal Cavern'}},
+    next:Date.now()+300000,targetEnergyReady:()=>true,persist(){}});
+  assert.deepEqual(r.calls,['shop']);assert.equal(r.c.state.targetMine,'Crystal Cavern');
+  assert.equal(r.c.state.energyWait,null);
 });
 test('shop completion preserves energy wait but advances the persistent phase',()=>{
   const c=vm.createContext({MINES:[{name:'Greenstone Quarry',minutes:10}],Date,

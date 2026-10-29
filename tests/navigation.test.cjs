@@ -38,3 +38,12 @@ test('stopped automation never uses a stale shop intent to purchase',()=>{
   vm.runInNewContext(startup,{localStorage:{getItem:key=>key==='bull-gems-upgrade-state-v3' ? JSON.stringify({mines:{},shop:{mine:'Crystal Cavern'}}) : 'false'},location:{pathname:'/trade',replace:url=>destinations.push(url)}});
   assert.deepEqual(destinations,['https://gem.bullshot.io/mining']);
 });
+test('new strategy discards old fallback deadlines without deleting pending purchase',()=>{
+  let written;
+  const pending={name:'Iron Drill',price:350};
+  const storage={getItem:key=>key==='bull-gems-auto-deploy-enabled-v1'?'true':key==='bull-gems-upgrade-state-v3'?JSON.stringify({mines:{'Crystal Cavern':{retryAt:9999999999999}},fallback:{mine:'Greenstone Quarry'},shop:{mine:'Crystal Cavern',pending}}):null,
+    setItem:(key,value)=>{if(key==='bull-gems-upgrade-state-v3')written=JSON.parse(value);}};
+  vm.runInNewContext(startup,{localStorage:storage,location:{pathname:'/trade',replace(){}}});
+  assert.equal(written.strategy,'power-first');assert.deepEqual(written.mines,{});
+  assert.equal(written.fallback,null);assert.deepEqual(written.shop.pending,pending);
+});
