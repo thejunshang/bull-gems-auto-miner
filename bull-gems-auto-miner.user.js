@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/thejunshang/bull-gems-auto-miner/issues
 // @downloadURL  https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
 // @updateURL    https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
-// @version      3.2.1
+// @version      3.2.2
 // @description  优先领取、检查商店购买矿力装备、部署允许的最高级矿区，串行操作与异常恢复。
 // @match        https://gem.bullshot.io/*
 // @grant        none
@@ -27,6 +27,39 @@
     {name:'Greenstone Quarry',minutes:10,level:1}
   ];
   const EQUIPMENT = ['Iron Pickaxe','Iron Drill','Copper Turbo Drill','Ruby Laser','Cryo Plasma Drill','Void Annihilator'];
+  const VERSION = '3.2.2';
+  const LOG_KEY = 'bull-gems-diagnostics-v1';
+  const runId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,7);
+  let logEntries = [];
+  let renderLogs = () => {};
+  function safeLogValue(value, depth = 0) {
+    if (depth > 5) return '[truncated]';
+    if (typeof value === 'string') return value
+      .replace(/0x[a-f\d]{16,}/gi,'[redacted-address]')
+      .replace(/\b(?:bearer\s+)[\w.\-]+/gi,'Bearer [redacted]')
+      .replace(/\b(?:token|password|secret|authorization|cookie|privatekey)\s*[:=]\s*[^\s,;]+/gi,'[redacted]')
+      .slice(0,400);
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (value === null || typeof value === 'boolean') return value;
+    if (Array.isArray(value)) return value.slice(0,20).map(v=>safeLogValue(v,depth+1));
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).slice(0,30)
+      .filter(([k])=>!/(?:token|password|secret|authorization|cookie|privatekey|wallet|address)/i.test(k))
+      .map(([k,v])=>[k,safeLogValue(v,depth+1)]));
+    return null;
+  }
+  try {
+    const stored = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
+    if (Array.isArray(stored)) logEntries = stored.slice(-300).map(entry=>safeLogValue(entry));
+  } catch (_) {}
+  function logEvent(event, data = {}) {
+    // Only explicit diagnostic fields are passed here. No full DOM, browser storage or requests.
+    const entry = {at:new Date().toISOString(),version:VERSION,run:runId,path:location.pathname,event,data:safeLogValue(data)};
+    logEntries.push(entry);
+    logEntries = logEntries.slice(-300);
+    try { localStorage.setItem(LOG_KEY,JSON.stringify(logEntries)); } catch (_) {}
+    console.info('[BullGems]',JSON.stringify(entry));
+    try { renderLogs(); } catch (_) {}
+  }
   let state = {mines:{},shop:null,next:0,fallback:null,phase:'shop',shopRequested:false};
   try {
     const saved = JSON.parse(localStorage.getItem(STATE_KEY) || 'null');
@@ -35,6 +68,12 @@
     if (!['shop','deploy'].includes(state.phase)) state.phase = 'shop';
   } catch (_) {}
   const persist = () => { localStorage.setItem(STATE_KEY, JSON.stringify(state)); };
+  function diagnosticState() {
+    return {phase:state.phase,target:state.targetMine || null,next:state.next,waitReason:state.waitReason || null,
+      energyWait:state.energyWait || null,shopRetryAt:state.shopRetryAt || 0,
+      shop:state.shop ? {mine:state.shop.mine,startedAt:state.shop.startedAt,pending:state.shop.pending || null} : null};
+  }
+  logEvent('page.start',diagnosticState());
   if (state.strategy !== 'power-first') {
     // The former duration-based fallback must not override the new PWR-first strategy.
     state.strategy = 'power-first'; state.mines = {}; state.fallback = null;
@@ -50,6 +89,7 @@
     // Never restart that request each second or run another transaction in it.
     if (navigationStarted) return;
     navigationStarted = Date.now();
+    logEvent('navigation.start',{destination:url===SHOP_URL ? '/trade' : '/mining',replace,...diagnosticState()});
     try {
       if (replace) location.replace(url);
       else location.assign(url);
@@ -85,7 +125,7 @@
   const panel = document.createElement('div');
   panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#101710;color:#fff;border:1px solid #baff31;border-radius:12px;padding:14px;font:14px/1.6 sans-serif;box-shadow:0 3px 20px #0008;width:250px';
   const title = document.createElement('strong');
-  title.textContent = 'Bull Gems 自动挖矿与升级 v3.2.1';
+  title.textContent = 'Bull Gems 自动挖矿与升级 v3.2.2';
   const status = document.createElement('div');
   const countdown = document.createElement('div');
   const settings = document.createElement('div');
@@ -101,8 +141,27 @@
   const toggle = document.createElement('button');
   toggle.style.cssText = 'margin-top:8px;background:#baff31;color:#111;border:0;border-radius:6px;padding:8px 14px;cursor:pointer';
   panel.append(title, status, countdown, settings, toggle);
+  const logDetails = document.createElement('details');
+  const logSummary = document.createElement('summary');
+  logSummary.textContent = '运行日志';
+  const logText = document.createElement('textarea');
+  logText.readOnly = true; logText.setAttribute('aria-label','运行诊断日志');
+  logText.style.cssText = 'width:100%;height:180px;box-sizing:border-box;font:11px monospace;color:#eee;background:#171d17';
+  const exportLogs = document.createElement('button'); exportLogs.textContent = '导出日志';
+  const clearLogs = document.createElement('button'); clearLogs.textContent = '清空日志';
+  logDetails.append(logSummary,logText,exportLogs,clearLogs); panel.append(logDetails);
+  renderLogs = () => { if (logDetails.open) logText.value = logEntries.slice(-50).map(e=>JSON.stringify(e)).join('\n'); };
+  logDetails.addEventListener('toggle',renderLogs);
+  exportLogs.addEventListener('click',()=>{
+    logEvent('logs.export',diagnosticState());
+    const payload = {version:VERSION,exportedAt:new Date().toISOString(),state:safeLogValue(diagnosticState()),events:logEntries};
+    const url = URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));
+    const link = document.createElement('a'); link.href=url; link.download=`bull-gems-logs-${Date.now()}.json`;
+    panel.append(link); link.click(); link.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
+  clearLogs.addEventListener('click',()=>{ logEntries=[]; logEvent('logs.cleared'); });
   document.body.append(panel);
-  const message = text => { status.textContent = text; console.info('[Auto Deploy]', text); };
+  const message = text => { status.textContent = text; logEvent('status',{message:text,...diagnosticState()}); };
   const visible = el => el.isConnected && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
   const usable = el => !el.disabled && el.getAttribute('aria-disabled') !== 'true' && !el.closest('[inert]');
   const findButton = label => [...document.querySelectorAll('button,[role="button"],input[type="button"],input[type="submit"]')]
@@ -125,6 +184,7 @@
       persist();
     } catch (_) {}
     const id = generation;
+    logEvent('recovery.scheduled',{reason,delay,...diagnosticState()});
     message(`${reason}；${delay / 1000}秒后自动刷新并继续`);
     recoveryTimer = setTimeout(() => {
       if (active(id)) location.reload();
@@ -174,6 +234,11 @@
     return false;
   }
   function startShop(mine = null) {
+    if (state.shopRetryAt > Date.now()) {
+      state.phase = 'deploy'; state.shopRequested = false; persist();
+      logEvent('shop.deferred',{until:state.shopRetryAt});
+      return;
+    }
     const target = mine || MINES.find(m => m.name === state.targetMine) || MINES[MINES.length-1];
     state.shop = {mine:target.name,startedAt:Date.now(),pending:null};
     state.phase = 'shop';
@@ -238,6 +303,7 @@
       if (!rewardRow || rewardRow === document.body) { recover('无法识别领取任务卡片'); return; }
       const taskKey = row => (row.innerText.match(/Started:\s*([\s\S]*?)Energy:/i)?.[1] || '').trim();
       const beforeKey = taskKey(rewardRow);
+      logEvent('claim.start',{mine:rewardRow.querySelector('h3')?.textContent.trim()});
       button.scrollIntoView({ behavior: 'smooth', block: 'center' });
       await sleep(600 + Math.random() * 600);
       if (!active(id) || !visible(button) || !usable(button)) return;
@@ -257,6 +323,7 @@
         return;
       }
       collectAttempts.delete(button);
+      logEvent('claim.confirmed');
       state.phase = 'shop';
       state.shopRequested = true;
       persist();
@@ -264,6 +331,7 @@
       message(`已确认任务从卡片移除，停顿${(pause / 1000).toFixed(1)}秒后领取下一个`);
       await sleep(pause);
     } catch (error) {
+      logEvent('claim.error',{error:String(error)});
       console.error('[Auto Collect]', error);
       if (active(id)) {
         recover('领取出现错误');
@@ -370,7 +438,9 @@
       if (!active(id)) return;
       const unlocked = unlockedMines();
       if (!unlocked.length) { recover('没有找到可识别的已解锁矿区'); return; }
-      const mine = choosePowerMine(unlocked,miningPower(),powerRequirements(unlocked));
+      const power = miningPower(), requirements = powerRequirements(unlocked);
+      const mine = choosePowerMine(unlocked,power,requirements);
+      logEvent('deploy.selection',{power,unlocked:unlocked.map(m=>m.name),requirements,target:mine?.name || null});
       if (!mine) {
         next = Date.now()+interval(); state.waitReason = 'conditions';
         message('已解锁矿区的 PWR 均不满足，等待下一轮商店检查'); return;
@@ -378,6 +448,7 @@
       state.targetMine = mine.name;
       if (state.energyWait?.mine !== mine.name) state.energyWait = null;
         const result = await attemptMine(id, mine.name);
+        logEvent('deploy.result',{mine:mine.name,...result});
         if (!active(id) || result.kind === 'cancelled') return;
         if (result.kind === 'cooldown') {
           next = result.until; state.waitReason = 'energy'; return;
@@ -402,6 +473,7 @@
         }
         message(waitingEnergy ? `锁定 ${mine.name}：PWR 已满足，还缺${result.minutes}点能量，按${result.minutes}分钟等待；不部署低级矿区` : `${mine.name} 页面条件发生变化，${intervalMinutes}分钟后重新检查，不在本轮降级部署`);
     } catch (error) {
+      logEvent('deploy.error',{error:String(error)});
       console.error('[Auto Deploy]', error);
       if (active(id)) recover('部署出现错误');
     } finally {
@@ -441,13 +513,37 @@
     const item = parseEquipment(name,card.innerText,buttons.length === 1);
     return item ? {...item,button:buttons[0]} : null;
   }
+  function shopDiagnostics() {
+    const items = EQUIPMENT.map(equipmentItem);
+    return {account:shopAccount(),missing:EQUIPMENT.filter((_,i)=>!items[i]),
+      items:items.filter(Boolean).map(({name,price,gain,level,owned,canPurchase})=>({name,price,gain,level,owned,canPurchase})),
+      readyState:document.readyState};
+  }
+  function deferShop(reason) {
+    // An uncertain purchase must be reconciled; never discard its journal to keep mining.
+    if (state.shop?.pending) {
+      logEvent('shop.pending-blocks-return',{reason,...shopDiagnostics()});
+      recover('商店未加载且有待确认购买，保留记录继续核对'); return;
+    }
+    state.shopRetryAt = Date.now()+300000;
+    state.shop = null; state.phase = 'deploy'; state.shopRequested = false;
+    persist();
+    logEvent('shop.load-deferred',{reason,retryAt:state.shopRetryAt,...shopDiagnostics()});
+    message('商店数据未加载完成，5分钟后重试商店；先返回 Mining 领取与部署');
+    navigate(MINING_URL);
+  }
   async function waitForShop(id) {
     const deadline = Date.now()+60000;
-    let scan = 0;
+    let scan = 0, lastProgress = 0;
     while (active(id) && onShop() && Date.now()<deadline) {
       const later = findButton('later').filter(usable);
       if (later.length === 1) { later[0].click(); await sleep(800); continue; }
-      if (shopAccount() && EQUIPMENT.every(name => equipmentItem(name))) return true;
+      if (Date.now()-lastProgress >= 15000) {
+        logEvent('shop.loading',shopDiagnostics()); lastProgress = Date.now();
+      }
+      if (shopAccount() && EQUIPMENT.every(name => equipmentItem(name))) {
+        logEvent('shop.loaded',shopDiagnostics()); return true;
+      }
       scan += Math.max(400,innerHeight*0.7);
       const root = document.scrollingElement || document.documentElement;
       if (scan > root.scrollHeight) scan = 0;
@@ -466,6 +562,7 @@
     while (active(id) && onShop() && Date.now()<deadline) {
       const item = equipmentItem(pending.name), account = shopAccount();
       if (purchaseConfirmed(pending,item,account)) {
+        logEvent('purchase.confirmed',{name:pending.name,account});
         state.shop.pending = null;
         persist();
         message(`${pending.name} 购买已确认，当前 ${account.power} PWR`);
@@ -474,16 +571,21 @@
       }
       await sleep(500);
     }
-    if (active(id)) recover('购买结果未确认，刷新后先核对同一笔购买，不重复点击');
+    if (active(id)) {
+      logEvent('purchase.unconfirmed',{pending,account:shopAccount(),...shopDiagnostics()});
+      recover('购买结果未确认，刷新后先核对同一笔购买，不重复点击');
+    }
     return false;
   }
   function finishShop(account) {
     state.lastShopPower = account.power;
+    state.shopRetryAt = 0;
     state.shop = null;
     state.phase = 'deploy'; // Persist across navigation; do not reopen the shop before deployment.
     state.shopRequested = false;
     // A reward-triggered shop visit must not cancel an already-confirmed energy/manual wait.
     persist();
+    logEvent('shop.completed',{account,...diagnosticState()});
     message('商店检查完成，返回 Mining 进入部署步骤');
     navigate(MINING_URL);
   }
@@ -492,7 +594,7 @@
     busy = true;
     const id = generation;
     try {
-      if (!await waitForShop(id)) { if (active(id)) recover('商店加载超时'); return; }
+      if (!await waitForShop(id)) { if (active(id)) deferShop('商店60秒内未加载全部商品或账户数据'); return; }
       if (!active(id)) return;
       if (state.shop.pending && !await confirmPurchase(id)) return;
       while (active(id) && onShop()) {
@@ -500,6 +602,7 @@
         const account = shopAccount();
         if (!account) { recover('无法识别商店余额或矿力'); return; }
         const candidate = chooseEquipment(EQUIPMENT.map(equipmentItem),account);
+        logEvent('shop.decision',{account,candidate:candidate ? {name:candidate.name,price:candidate.price,gain:candidate.gain} : null});
         if (!candidate) {
           const pause = 3000+Math.random()*2000;
           message(`没有可购买的矿力装备，停留${(pause/1000).toFixed(1)}秒后返回 Mining`);
@@ -520,14 +623,17 @@
         if (!liveItem || !bestNow || bestNow.name !== candidate.name || liveItem.price !== candidate.price || liveItem.gain !== candidate.gain) continue;
         state.shop.pending = {name:liveItem.name,price:liveItem.price,gain:liveItem.gain,beforeBalance:liveAccount.balance,beforePower:liveAccount.power,at:Date.now()};
         persist(); // Never submit a purchase unless the recovery journal is saved first.
+        logEvent('purchase.prepared',state.shop.pending);
         if (!active(id) || !usable(liveItem.button)) {
           state.shop.pending = null; persist(); return;
         }
         liveItem.button.click();
+        logEvent('purchase.clicked',{name:liveItem.name});
         message(`已点击购买 ${liveItem.name}，等待余额、Owned 和 PWR 变化…`);
         if (!await confirmPurchase(id)) return;
       }
     } catch (error) {
+      logEvent('shop.error',{error:String(error)});
       console.error('[Auto Shop]',error);
       if (active(id)) recover('商店操作出现错误');
     } finally { busy = false; }
@@ -556,6 +662,7 @@
       state.next = next;
       try { persist(); } catch (_) {}
     }
+    logEvent('automation.toggle',{enabled:value,restoring,...diagnosticState()});
   }
   toggle.addEventListener('click', () => setEnabled(!enabled));
   async function closeRewardObstruction() {
@@ -570,12 +677,18 @@
     } finally { busy = false; }
     return true;
   }
+  let lastHeartbeat = 0;
   setInterval(() => {
     try {
+      if (enabled && Date.now()-lastHeartbeat >= 30000) {
+        lastHeartbeat = Date.now();
+        logEvent('scheduler.heartbeat',{busy,collecting,recovering,navigating:Boolean(navigationStarted),...diagnosticState()});
+      }
       if (navigationStarted) {
         countdown.textContent = '正在跳转页面，等待加载完成…';
         if (enabled && Date.now() - navigationStarted > 60000) {
           navigationStarted = Date.now();
+          logEvent('navigation.timeout',diagnosticState());
           location.reload();
         }
         return;
@@ -588,6 +701,7 @@
       countdown.textContent = collecting ? '正在逐个领取…' : busy ? '正在处理页面…' : `下次部署检查：${Math.floor(remaining/60)}分${remaining%60}秒`;
       if (state.targetMine) countdown.textContent += `；目标：${state.targetMine}`;
       if (state.energyWait?.until > Date.now()) countdown.textContent += '（等待能量，不降级）';
+      if (state.shopRetryAt > Date.now()) countdown.textContent += `；商店${Math.ceil((state.shopRetryAt-Date.now())/60000)}分钟后重试`;
       if (busy || collecting) return;
       // Claim one ready reward before any shop visit or deployment; drilling positions do not block.
       if (findButton('collect rewards').some(usable) || findButton('collect').some(usable)) {
@@ -605,6 +719,7 @@
       }
       if (Date.now() >= next) void run();
     } catch (error) {
+      logEvent('scheduler.error',{error:String(error)});
       console.error('[Auto Scheduler]',error);
       recover('调度状态出现错误');
     }

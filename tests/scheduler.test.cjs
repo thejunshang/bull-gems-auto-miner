@@ -8,7 +8,7 @@ const start=source.indexOf('  setInterval(() => {');
 const tickSource=source.slice(start,source.indexOf('  }, 1000);',start)+12);
 function scheduler(overrides={}){
   const calls=[];
-  const c=vm.createContext({Date,Math,console,enabled:true,busy:false,collecting:false,recovering:false,next:0,intervalMinutes:10,
+  const c=vm.createContext({Date,Math,console,logEvent(){},diagnosticState(){return {};},lastHeartbeat:Date.now(),enabled:true,busy:false,collecting:false,recovering:false,next:0,intervalMinutes:10,
     navigationStarted:0,state:{mines:{}},countdown:{textContent:''},redirectToMining:()=>false,onShop:()=>false,
     findButton:()=>[],usable:()=>true,visible:()=>true,document:{querySelectorAll:()=>[]},targetEnergyReady:()=>false,dueUpgrade:()=>({name:'Crystal Cavern'}),
     startShop:()=>calls.push('shop'),collectRewards:()=>calls.push('claim'),run:()=>calls.push('deploy'),runShop:()=>calls.push('shopRun'),
@@ -56,7 +56,7 @@ test('target energy reaching cost wakes the waiting round without selecting a lo
 test('shop completion preserves energy wait but advances the persistent phase',()=>{
   const c=vm.createContext({MINES:[{name:'Greenstone Quarry',minutes:10}],Date,
     state:{mines:{},shop:{mine:'Greenstone Quarry'},next:Date.now()+300000,waitReason:'energy'},
-    persist(){},message(){},navigate(){},MINING_URL:'mining'});
+    persist(){},message(){},logEvent(){},diagnosticState(){return {};},navigate(){},MINING_URL:'mining'});
   const before=c.state.next;
   vm.runInContext(source.slice(source.indexOf('  function finishShop('),source.indexOf('  async function runShop(')),c);
   c.finishShop({power:10});
@@ -70,7 +70,7 @@ async function shopRun(overrides={}){
   const button={scrollIntoView(){},click(){calls.push('click');}};
   const item={name:'Iron Drill',price:350,gain:6,owned:false,canPurchase:true,button};
   let confirmed=false;
-  const c=vm.createContext({console,Math,Date,enabled:true,busy:false,collecting:false,recovering:false,generation:1,
+  const c=vm.createContext({console,Math,Date,logEvent(){},enabled:true,busy:false,collecting:false,recovering:false,generation:1,
     onShop:()=>true,state:{shop:{mine:'Crystal Cavern',pending:null}},active:()=>true,EQUIPMENT:['Iron Drill'],
     waitForShop:async()=>true,document:{querySelectorAll:()=>[]},visible:()=>true,
     shopAccount:()=>({balance:1000,power:4,level:5}),equipmentItem:()=>item,

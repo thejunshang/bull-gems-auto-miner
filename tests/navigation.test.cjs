@@ -10,7 +10,7 @@ const startup = source.slice(0, source.indexOf('  let intervalMinutes')) + '\n})
 
 test('slow shop navigation is submitted once despite repeated route checks',()=>{
   const calls=[];
-  const c=vm.createContext({Date,location:{pathname:'/mining',assign:u=>calls.push(['assign',u]),replace:u=>calls.push(['replace',u])},
+  const c=vm.createContext({Date,logEvent(){},diagnosticState(){return {};},location:{pathname:'/mining',assign:u=>calls.push(['assign',u]),replace:u=>calls.push(['replace',u])},
     localStorage:{getItem:()=> 'true'},state:{shop:{mine:'Crystal Cavern'}},SHOP_URL:'shop',MINING_URL:'mining'});
   vm.runInContext(source.slice(source.indexOf('  const onShop ='),source.indexOf('  // Scope stays')),c);
   c.navigate('shop');
@@ -19,7 +19,7 @@ test('slow shop navigation is submitted once despite repeated route checks',()=>
 });
 test('slow return from shop is not restarted after its intent is cleared',()=>{
   const calls=[];
-  const c=vm.createContext({Date,location:{pathname:'/trade',assign:u=>calls.push(u),replace:u=>calls.push(u)},
+  const c=vm.createContext({Date,logEvent(){},diagnosticState(){return {};},location:{pathname:'/trade',assign:u=>calls.push(u),replace:u=>calls.push(u)},
     localStorage:{getItem:()=> 'true'},state:{shop:null},SHOP_URL:'shop',MINING_URL:'mining'});
   vm.runInContext(source.slice(source.indexOf('  const onShop ='),source.indexOf('  // Scope stays')),c);
   c.navigate('mining');

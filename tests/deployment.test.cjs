@@ -27,7 +27,7 @@ test('unknown account PWR fails closed',()=>assert.throws(()=>ctx.choosePowerMin
 const runSource=source.slice(source.indexOf('  async function run()'),source.indexOf('  function setEnabled('));
 async function simulate(result,power=25,level=5){
   const calls=[],errors=[];
-  const c=vm.createContext({Date,Math,console,enabled:true,recovering:false,busy:false,collecting:false,generation:1,
+  const c=vm.createContext({Date,Math,console,logEvent(){},enabled:true,recovering:false,busy:false,collecting:false,generation:1,
     waitingEnergy:false,next:0,intervalMinutes:10,state:{mines:{},shop:null,next:0},persist(){},onMining:()=>true,
     active:()=>true,interval:()=>600000,loadMineCatalogue:async()=>true,unlockedMines:()=>mines.filter(m=>m.level<=level),
     miningPower:()=>power,powerRequirements:()=>requirements,choosePowerMine:ctx.choosePowerMine,

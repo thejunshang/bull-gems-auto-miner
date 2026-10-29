@@ -44,7 +44,7 @@ test('single purchase is confirmed only by owned, debit and PWR increase togethe
 test('shop preserves selected mine and energy wait after PWR purchase',()=>{
   const until=Date.now()+420000;
   const c=vm.createContext({Date,state:{shop:{mine:'Crystal Cavern'},next:until,waitReason:'energy',targetMine:'Crystal Cavern',energyWait:{mine:'Crystal Cavern',until}},
-    persist(){},message(){},MINING_URL:'mining',navigate(){}});
+    persist(){},message(){},logEvent(){},diagnosticState(){return {};},MINING_URL:'mining',navigate(){}});
   vm.runInContext(source.slice(source.indexOf('  function finishShop('),source.indexOf('  async function runShop(')),c);
   c.finishShop({power:25});
   assert.equal(c.state.phase,'deploy');assert.equal(c.state.next,until);
