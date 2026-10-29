@@ -122,3 +122,29 @@ test('fallback catalogue loading never scrolls or scans higher mine cards',async
   assert.equal(await c.loadMineCatalogue(1),true);
   assert.deepEqual(reads,['Greenstone Quarry']);
 });
+test('successful fallback deployment schedules seconds instead of the default ten minutes',async()=>{
+  const before=Date.now();
+  const r=await simulate([{kind:'blocked',requiredPower:25},{kind:'success'}]);
+  assert.ok(r.context.next>=before+4000 && r.context.next<=Date.now()+6000);
+  assert.equal(r.context.state.waitReason,'success');
+});
+test('failed deployment never pre-saves the default ten minute interval',async()=>{
+  const r=await simulate([{kind:'error',reason:'timeout'}]);
+  assert.ok(r.context.state.next<=Date.now());
+  assert.equal(r.context.state.waitReason,'checking');
+});
+const restoreCtx=vm.createContext({Date});
+vm.runInContext(source.slice(source.indexOf('  function restoredDeploymentTime('),source.indexOf('  function setEnabled(')),restoreCtx);
+for(const reason of [undefined,'checking','recovery','ready']){
+  test(`refresh discards unsupported/provisional ${reason} wait`,()=>{
+    assert.equal(restoreCtx.restoredDeploymentTime({next:610000,waitReason:reason},10000),10000);
+  });
+}
+for(const reason of ['manual','energy','conditions','cooldown']){
+  test(`refresh preserves confirmed ${reason} wait`,()=>{
+    assert.equal(restoreCtx.restoredDeploymentTime({next:610000,waitReason:reason},10000),610000);
+  });
+}
+test('refresh after success resumes within six seconds even if old next is ten minutes away',()=>{
+  assert.equal(restoreCtx.restoredDeploymentTime({next:610000,waitReason:'success'},10000),16000);
+});

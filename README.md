@@ -1,6 +1,6 @@
 # Bull Gems Auto Miner
 
-用于 [Bull Gems Mining](https://gem.bullshot.io/mining) 的 Tampermonkey 浏览器脚本。当前版本：**3.0.1**。
+用于 [Bull Gems Mining](https://gem.bullshot.io/mining) 的 Tampermonkey 浏览器脚本。当前版本：**3.0.2**。
 
 支持优先领取奖励、按解锁状态部署高级矿区、矿力不足时定时前往商店升级，以及异常刷新恢复。所有操作串行执行。运行在已登录的浏览器页面中，无需服务器、Node.js 或私钥。
 

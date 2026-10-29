@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/thejunshang/bull-gems-auto-miner/issues
 // @downloadURL  https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
 // @updateURL    https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
-// @version      3.0.1
+// @version      3.0.2
 // @description  优先领取、高级矿区部署、按矿区时长自动检查商店升级，串行操作与异常恢复。
 // @match        https://gem.bullshot.io/*
 // @grant        none
@@ -72,7 +72,7 @@
   const panel = document.createElement('div');
   panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#101710;color:#fff;border:1px solid #baff31;border-radius:12px;padding:14px;font:14px/1.6 sans-serif;box-shadow:0 3px 20px #0008;width:250px';
   const title = document.createElement('strong');
-  title.textContent = 'Bull Gems 自动挖矿与升级 v3.0.1';
+  title.textContent = 'Bull Gems 自动挖矿与升级 v3.0.2';
   const status = document.createElement('div');
   const countdown = document.createElement('div');
   const settings = document.createElement('div');
@@ -107,6 +107,9 @@
       delay = Math.min(60000, 10000 * count);
       sessionStorage.setItem('bull-gems-recovery', JSON.stringify({at:Date.now(),count}));
       localStorage.setItem(KEY, 'true');
+      state.waitReason = 'recovery';
+      state.next = 0;
+      persist();
     } catch (_) {}
     const id = generation;
     message(`${reason}；${delay / 1000}秒后自动刷新并继续`);
@@ -260,6 +263,7 @@
     try { localStorage.setItem('bull-gems-wait-minutes', String(value)); } catch (_) {}
     if (enabled) next = Date.now() + interval();
     state.next = next;
+    state.waitReason = 'manual';
     try { persist(); } catch (_) {}
     message(`等待时间已更新为${value}分钟，从现在重新计时`);
   });
@@ -325,7 +329,9 @@
     if (!enabled || recovering || busy || collecting || !onMining()) return;
     busy = true;
     const id = generation;
-    next = Date.now() + interval();
+    // Do not pre-save a default wait before the result of a deployment is known.
+    next = Date.now();
+    state.waitReason = 'checking';
     try {
       const empty = findButton('deploy machinery below').filter(usable);
       if (empty.length === 1 && document.body.innerText.includes('No Active Mining Operations')) {
@@ -339,6 +345,7 @@
       const mines = selectMines(unlocked);
       if (!mines.length) {
         next = Math.min(...unlocked.map(m => blockedUntil(m.name)));
+        state.waitReason = 'cooldown';
         message('矿区冷却中，等待下一次检查'); return;
       }
       for (const mine of mines) {
@@ -350,6 +357,7 @@
           delete state.mines[mine.name];
           waitingEnergy = false;
           next = Date.now() + 4000 + Math.random() * 2000;
+          state.waitReason = 'success';
           message(`${mine.name} 部署成功，4～6秒后仅继续检查允许部署的矿区；高级矿区等待时间不变`);
           return;
         }
@@ -366,7 +374,13 @@
           continue;
         }
         waitingEnergy = result.kind === 'energy';
-        if (waitingEnergy && result.minutes > 0) next = Date.now() + result.minutes * 60000;
+        if (waitingEnergy && result.minutes > 0) {
+          next = Date.now() + result.minutes * 60000;
+          state.waitReason = 'energy';
+        } else {
+          next = Date.now() + interval();
+          state.waitReason = 'conditions';
+        }
         message(waitingEnergy ? `${mine.name} 还缺${result.minutes}点能量，按${result.minutes}分钟等待` : `${mine.name} 条件不足，${intervalMinutes}分钟后重新检查`);
       }
     } catch (error) {
@@ -460,6 +474,7 @@
     else if (state.fallback?.source === target) state.fallback = null;
     state.shop = null;
     state.next = 0;
+    state.waitReason = 'ready';
     persist();
     message('商店检查完成，返回 Mining');
     location.assign(MINING_URL);
@@ -499,6 +514,14 @@
       if (active(id)) recover('商店操作出现错误');
     } finally { busy = false; }
   }
+  function restoredDeploymentTime(saved, now = Date.now()) {
+    const at = Number(saved.next);
+    if (!Number.isFinite(at) || at <= now) return now;
+    if (['manual','energy','conditions','cooldown'].includes(saved.waitReason)) return at;
+    if (saved.waitReason === 'success') return Math.min(at,now+6000);
+    // Old v3 timers and interrupted operations are not evidence of energy shortage.
+    return now;
+  }
   function setEnabled(value, restoring = false) {
     enabled = value;
     generation++;
@@ -508,7 +531,7 @@
     try { localStorage.setItem(KEY, String(value)); } catch (_) { /* Storage may be unavailable. */ }
     toggle.textContent = value ? '停止自动部署' : '开始（立即执行一次）';
     message(value ? '自动部署已开启' : '已停止');
-    next = value ? (restoring && state.next > 0 ? state.next : Date.now()) : 0;
+    next = value ? (restoring ? restoredDeploymentTime(state) : Date.now()) : 0;
   }
   toggle.addEventListener('click', () => setEnabled(!enabled));
   async function closeRewardObstruction() {
