@@ -1,5 +1,11 @@
 # 验证记录
 
+## v3.2.4 验证范围
+
+- 已实测v3.2.3：旧Iron Drill记录以already-owned核对完成，商店停留约3.2秒后返回Mining，Greenstone部署成功，领取一笔奖励后余额从2004.6变为2033.1。
+- 第二轮现场发现：主区域0PWR/0能量、CrystalLocked，但侧栏10PWR/90以上能量、Lvl5，脚本错误安排10分钟等待；新日志还显示再次提交已拥有装备的尝试，未确认成功。
+- v3.2.4补充账户一致性、默认零值、矿区临时锁定、弹窗默认能量与已拥有装备防重复测试；这部分新版尚未在用户浏览器安装验收。
+
 ## v3.2.3 验证范围
 
 - 在实际用户 v3.2.2 页面日志中确认：shop.loading 的 missing 包含全部6件装备，items为空；旧Iron Drill记录触发shop.pending-blocks-return，随后recovery.scheduled刷新，构成循环。

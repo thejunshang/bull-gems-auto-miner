@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/thejunshang/bull-gems-auto-miner/issues
 // @downloadURL  https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
 // @updateURL    https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
-// @version      3.2.3
+// @version      3.2.4
 // @description  优先领取、检查商店购买矿力装备、部署允许的最高级矿区，串行操作与异常恢复。
 // @match        https://gem.bullshot.io/*
 // @grant        none
@@ -27,7 +27,7 @@
     {name:'Greenstone Quarry',minutes:10,level:1}
   ];
   const EQUIPMENT = ['Iron Pickaxe','Iron Drill','Copper Turbo Drill','Ruby Laser','Cryo Plasma Drill','Void Annihilator'];
-  const VERSION = '3.2.3';
+  const VERSION = '3.2.4';
   const LOG_KEY = 'bull-gems-diagnostics-v1';
   const runId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,7);
   let logEntries = [];
@@ -67,6 +67,10 @@
     if (state.shop && !MINES.some(m => m.name === state.shop.mine)) state.shop = null;
     if (!['shop','deploy'].includes(state.phase)) state.phase = 'shop';
   } catch (_) {}
+  state.ownedEquipment = Array.isArray(state.ownedEquipment) ? state.ownedEquipment.filter(name=>EQUIPMENT.includes(name)) : [];
+  if (EQUIPMENT.includes(state.lastPurchaseReview?.name) && ['confirmed','already-owned'].includes(state.lastPurchaseReview.resolution)) {
+    state.ownedEquipment=[...new Set([...state.ownedEquipment,state.lastPurchaseReview.name])];
+  }
   const persist = () => { localStorage.setItem(STATE_KEY, JSON.stringify(state)); };
   function diagnosticState() {
     return {phase:state.phase,target:state.targetMine || null,next:state.next,waitReason:state.waitReason || null,
@@ -125,7 +129,7 @@
   const panel = document.createElement('div');
   panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#101710;color:#fff;border:1px solid #baff31;border-radius:12px;padding:14px;font:14px/1.6 sans-serif;box-shadow:0 3px 20px #0008;width:250px';
   const title = document.createElement('strong');
-  title.textContent = 'Bull Gems 自动挖矿与升级 v3.2.3';
+  title.textContent = 'Bull Gems 自动挖矿与升级 v3.2.4';
   const status = document.createElement('div');
   const countdown = document.createElement('div');
   const settings = document.createElement('div');
@@ -218,19 +222,55 @@
       return !labels.includes('locked') && (labels.includes('unlocked') || labels.includes('running'));
     });
   }
+  function readSidebarAccount(text) {
+    const number = pattern => {
+      const match = text.match(pattern);
+      return match ? Number(match[1].replace(/,/g,'')) : NaN;
+    };
+    return {level:number(/\bLVL\s*(\d+)/i),power:number(/\bPower\s*([\d,]+(?:\.\d+)?)\s*PWR/i),
+      energy:number(/\bEnergy\s*([\d,]+(?:\.\d+)?)/i),balance:number(/\bGems\s*([\d,]+(?:\.\d+)?)/i)};
+  }
+  function sidebarAccount() {
+    return readSidebarAccount(document.querySelector('aside,[role="complementary"]')?.innerText || '');
+  }
+  function accountMatches(main, sidebar, kind) {
+    const fields = kind === 'shop' ? ['level','power','balance'] : ['power','energy'];
+    return fields.every(key => Number.isFinite(main?.[key]) && Number.isFinite(sidebar?.[key]) && Math.abs(main[key]-sidebar[key]) < 0.011);
+  }
+  function miningAccount() {
+    const text = document.querySelector('main')?.innerText || '';
+    const energy = text.match(/Available energy\s*([\d,]+(?:\.\d+)?)/i);
+    return {power:miningPower(),energy:energy ? Number(energy[1].replace(/,/g,'')) : NaN};
+  }
+  function miningDataReady() {
+    const side = sidebarAccount();
+    if (!Number.isFinite(side.level) || !accountMatches(miningAccount(),side,'mining')) return false;
+    const unlocked = unlockedMines().map(m=>m.name);
+    return MINES.every(m=>unlocked.includes(m.name) === (side.level >= m.level));
+  }
+  function dialogAccountMatches(text, account) {
+    const energy = text.match(/Energy cost\s*[\d.]+\s*\/\s*([\d.]+)/i);
+    const power = text.match(/Mining power req\.\s*[\d.]+\s*\/\s*([\d.]+)\s*PWR/i);
+    return Boolean(energy && power && accountMatches({energy:Number(energy[1]),power:Number(power[1])},account,'mining'));
+  }
   async function loadMineCatalogue(id) {
     const deadline = Date.now() + 60000;
-    let scan = 0;
+    let scan = 0, stableSince = 0, fingerprint = '';
     message('滚动加载矿区列表并检查解锁状态…');
     while (active(id) && onMining() && Date.now() < deadline) {
       const loaded = MINES.every(m => cardFor(m.name,'h2'));
-      if (document.readyState !== 'loading' && loaded) return true;
+      if (document.readyState !== 'loading' && loaded && miningDataReady()) {
+        const current = JSON.stringify({account:miningAccount(),level:sidebarAccount().level,unlocked:unlockedMines().map(m=>m.name)});
+        if (current !== fingerprint) { fingerprint=current; stableSince=Date.now(); }
+        if (Date.now()-stableSince >= 2500) { logEvent('mining.loaded',{account:miningAccount(),level:sidebarAccount().level}); return true; }
+      } else { stableSince=0; fingerprint=''; }
       const root = document.scrollingElement || document.documentElement;
       const max = Math.max(0, root.scrollHeight - innerHeight);
       scan = scan >= max ? 0 : Math.min(max, scan + Math.max(400,innerHeight * 0.7));
       window.scrollTo({top:scan,behavior:'smooth'});
       await sleep(1200);
     }
+    if (active(id)) logEvent('mining.not-ready',{account:miningAccount(),sidebar:sidebarAccount()});
     return false;
   }
   function startShop(mine = null) {
@@ -401,6 +441,8 @@
     while (active(id) && Date.now() < deadline) {
       const dialog = deployDialog();
       if (!dialog) { await sleep(300); continue; }
+      // Dialogs can also render default zero values before account data arrives.
+      if (!miningDataReady() || !dialogAccountMatches(dialog.innerText,miningAccount())) { await sleep(300); continue; }
       const miners = findButton('deploy miner').filter(el => usable(el) && dialog.contains(el));
       const result = deploymentStatus(dialog.innerText, miners.length === 1);
       if (result.kind === 'energy' || result.kind === 'blocked') {
@@ -438,6 +480,11 @@
       }
       if (!await loadMineCatalogue(id)) { if (active(id)) recover('矿区列表加载超时'); return; }
       if (!active(id)) return;
+      // Ready tasks may arrive after the first scheduler tick while the page hydrates.
+      if ([...findButton('collect rewards'),...findButton('collect')].some(usable)) {
+        state.shopRequested = true; next=Date.now();
+        logEvent('deploy.yield-to-claim'); return;
+      }
       const unlocked = unlockedMines();
       if (!unlocked.length) { recover('没有找到可识别的已解锁矿区'); return; }
       const power = miningPower(), requirements = powerRequirements(unlocked);
@@ -513,6 +560,7 @@
     if (!card) return null;
     const buttons = [...card.querySelectorAll('button')].filter(el => visible(el) && usable(el) && el.textContent.trim().toLowerCase() === 'purchase');
     const item = parseEquipment(name,card.innerText,buttons.length === 1);
+    if (item && (state.ownedEquipment || []).includes(name)) { item.owned=true; item.canPurchase=false; }
     return item ? {...item,button:buttons[0]} : null;
   }
   function shopDiagnostics() {
@@ -537,16 +585,21 @@
   }
   async function waitForShop(id) {
     const deadline = Date.now()+60000;
-    let scan = 0, lastProgress = 0;
+    let scan = 0, lastProgress = 0, stableSince = 0, fingerprint = '';
     while (active(id) && onShop() && Date.now()<deadline) {
       const later = findButton('later').filter(usable);
       if (later.length === 1) { later[0].click(); await sleep(800); continue; }
       if (Date.now()-lastProgress >= 15000) {
         logEvent('shop.loading',shopDiagnostics()); lastProgress = Date.now();
       }
-      if (shopAccount() && EQUIPMENT.every(name => equipmentItem(name))) {
-        logEvent('shop.loaded',shopDiagnostics()); return true;
-      }
+      if (accountMatches(shopAccount(),sidebarAccount(),'shop') && EQUIPMENT.every(name => equipmentItem(name))) {
+        const snapshot=shopDiagnostics(), current=JSON.stringify(snapshot);
+        if (current !== fingerprint) { fingerprint=current; stableSince=Date.now(); }
+        if (Date.now()-stableSince >= 2500) {
+          state.ownedEquipment=[...new Set([...(state.ownedEquipment || []),...snapshot.items.filter(i=>i.owned).map(i=>i.name)])];
+          persist(); logEvent('shop.loaded',snapshot); return true;
+        }
+      } else { stableSince=0; fingerprint=''; }
       scan += Math.max(400,innerHeight*0.7);
       const root = document.scrollingElement || document.documentElement;
       if (scan > root.scrollHeight) scan = 0;
@@ -575,6 +628,7 @@
       if (resolution) {
         logEvent(resolution==='confirmed' ? 'purchase.confirmed' : 'purchase.ownership-reconciled',{name:pending.name,account,resolution});
         state.lastPurchaseReview = {...pending,resolution,resolvedAt:Date.now()};
+        state.ownedEquipment=[...new Set([...(state.ownedEquipment || []),pending.name])];
         state.shop.pending = null;
         state.purchaseReview = null;
         persist();
@@ -614,6 +668,7 @@
         if ([...document.querySelectorAll('[role="dialog"]')].some(visible)) { recover('商店出现未识别弹窗'); return; }
         const account = shopAccount();
         if (!account) { recover('无法识别商店余额或矿力'); return; }
+        if (!accountMatches(account,sidebarAccount(),'shop')) { deferShop('商店账户数据与侧栏不一致'); return; }
         const candidate = chooseEquipment(EQUIPMENT.map(equipmentItem),account);
         logEvent('shop.decision',{account,candidate:candidate ? {name:candidate.name,price:candidate.price,gain:candidate.gain} : null});
         if (!candidate) {
@@ -633,6 +688,7 @@
         if (!active(id)) return;
         const liveAccount = shopAccount(), liveItem = equipmentItem(candidate.name);
         const bestNow = liveAccount && chooseEquipment(EQUIPMENT.map(equipmentItem),liveAccount);
+        if (!accountMatches(liveAccount,sidebarAccount(),'shop')) { deferShop('购买前账户数据尚未同步'); return; }
         if (!liveItem || !bestNow || bestNow.name !== candidate.name || liveItem.price !== candidate.price || liveItem.gain !== candidate.gain) continue;
         state.shop.pending = {name:liveItem.name,price:liveItem.price,gain:liveItem.gain,beforeBalance:liveAccount.balance,beforePower:liveAccount.power,at:Date.now()};
         persist(); // Never submit a purchase unless the recovery journal is saved first.

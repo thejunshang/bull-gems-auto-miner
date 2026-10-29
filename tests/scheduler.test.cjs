@@ -73,7 +73,7 @@ async function shopRun(overrides={}){
   const c=vm.createContext({console,Math,Date,logEvent(){},enabled:true,busy:false,collecting:false,recovering:false,generation:1,
     onShop:()=>true,state:{shop:{mine:'Crystal Cavern',pending:null}},active:()=>true,EQUIPMENT:['Iron Drill'],
     waitForShop:async()=>true,document:{querySelectorAll:()=>[]},visible:()=>true,
-    shopAccount:()=>({balance:1000,power:4,level:5}),equipmentItem:()=>item,
+    shopAccount:()=>({balance:1000,power:4,level:5}),sidebarAccount:()=>({balance:1000,power:4,level:5}),accountMatches:()=>true,equipmentItem:()=>item,
     chooseEquipment:()=>confirmed?null:item,message:()=>{},sleep:async()=>{},usable:()=>true,
     persist:()=>calls.push('persist'),recover:()=>calls.push('recover'),finishShop:()=>calls.push('return'),
     confirmPurchase:async()=>{calls.push('confirm');confirmed=true;return true;},...overrides});

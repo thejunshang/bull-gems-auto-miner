@@ -16,7 +16,7 @@ test('diagnostic history survives a new document and records version, route and 
   const second=makeLogger(store);second.logEvent('page.start');
   const events=JSON.parse(store.get('bull-gems-diagnostics-v1'));
   assert.equal(events.length,2);assert.equal(events[0].event,'shop.loading');
-  assert.equal(events[0].path,'/trade');assert.equal(events[0].version,'3.2.3');
+  assert.equal(events[0].path,'/trade');assert.equal(events[0].version,'3.2.4');
   assert.ok(Number.isFinite(Date.parse(events[0].at)));
 });
 test('history is bounded to the last three hundred events',()=>{
