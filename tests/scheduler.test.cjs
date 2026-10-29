@@ -72,3 +72,14 @@ test('unconfirmed prior purchase blocks any new purchase',async()=>{
 test('failed journal persistence prevents purchase submission',async()=>{
   assert.deepEqual(await shopRun({persist:()=>{throw Error('storage unavailable');},console:{error() {}}}),['recover']);
 });
+test('empty shop pauses 3-5 seconds before returning',async()=>{
+  const pauses=[];
+  const calls=await shopRun({chooseEquipment:()=>null,sleep:async ms=>pauses.push(ms)});
+  assert.deepEqual(calls,['return']);
+  assert.equal(pauses.length,1);assert.ok(pauses[0]>=3000&&pauses[0]<=5000);
+});
+test('stop during empty shop pause cancels return navigation',async()=>{
+  let running=true;
+  const calls=await shopRun({chooseEquipment:()=>null,active:()=>running,sleep:async()=>{running=false;}});
+  assert.deepEqual(calls,[]);
+});

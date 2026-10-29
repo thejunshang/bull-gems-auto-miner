@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/thejunshang/bull-gems-auto-miner/issues
 // @downloadURL  https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
 // @updateURL    https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
-// @version      3.1.0
+// @version      3.1.1
 // @description  优先领取、检查商店购买矿力装备、部署允许的最高级矿区，串行操作与异常恢复。
 // @match        https://gem.bullshot.io/*
 // @grant        none
@@ -73,7 +73,7 @@
   const panel = document.createElement('div');
   panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#101710;color:#fff;border:1px solid #baff31;border-radius:12px;padding:14px;font:14px/1.6 sans-serif;box-shadow:0 3px 20px #0008;width:250px';
   const title = document.createElement('strong');
-  title.textContent = 'Bull Gems 自动挖矿与升级 v3.1';
+  title.textContent = 'Bull Gems 自动挖矿与升级 v3.1.1';
   const status = document.createElement('div');
   const countdown = document.createElement('div');
   const settings = document.createElement('div');
@@ -501,7 +501,17 @@
         const account = shopAccount();
         if (!account) { recover('无法识别商店余额或矿力'); return; }
         const candidate = chooseEquipment(EQUIPMENT.map(equipmentItem),account);
-        if (!candidate) { finishShop(account); return; }
+        if (!candidate) {
+          const pause = 3000+Math.random()*2000;
+          message(`没有可购买的矿力装备，停留${(pause/1000).toFixed(1)}秒后返回 Mining`);
+          await sleep(pause);
+          if (!active(id) || !onShop()) return;
+          // The account may update during the pause; recheck before leaving.
+          const latestAccount = shopAccount();
+          if (!latestAccount) { recover('商店停留后无法识别余额'); return; }
+          if (chooseEquipment(EQUIPMENT.map(equipmentItem),latestAccount)) continue;
+          finishShop(latestAccount); return;
+        }
         message(`准备购买 ${candidate.name}：${candidate.price} GEMS，+${candidate.gain} PWR`);
         candidate.button.scrollIntoView({behavior:'smooth',block:'center'});
         await sleep(1000+Math.random()*1000);
