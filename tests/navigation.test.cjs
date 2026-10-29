@@ -25,3 +25,16 @@ for (const pathname of ['/mining', '/mining/']) {
 test('userscript matches only the Bull Gems HTTPS origin', () => {
   assert.deepEqual([...source.matchAll(/^\/\/ @match\s+(.+)$/gm)].map(m => m[1].trim()), ['https://gem.bullshot.io/*']);
 });
+for (const pathname of ['/trade','/mining']) {
+  test(`active scheduled shop visit permits /trade from ${pathname}`,()=>{
+    const destinations=[];
+    const storage={getItem:key=>key==='bull-gems-auto-deploy-enabled-v1' ? 'true' : key==='bull-gems-upgrade-state-v3' ? JSON.stringify({mines:{},shop:{mine:'Crystal Cavern'}}) : null};
+    vm.runInNewContext(startup,{localStorage:storage,location:{pathname,replace:url=>destinations.push(url)}});
+    assert.deepEqual(destinations,pathname==='/trade' ? [] : ['https://gem.bullshot.io/trade']);
+  });
+}
+test('stopped automation never uses a stale shop intent to purchase',()=>{
+  const destinations=[];
+  vm.runInNewContext(startup,{localStorage:{getItem:key=>key==='bull-gems-upgrade-state-v3' ? JSON.stringify({mines:{},shop:{mine:'Crystal Cavern'}}) : 'false'},location:{pathname:'/trade',replace:url=>destinations.push(url)}});
+  assert.deepEqual(destinations,['https://gem.bullshot.io/mining']);
+});
