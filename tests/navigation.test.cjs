@@ -8,6 +8,25 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'bull-gems-auto-miner.
 // Exercise the actual startup navigation before the script initializes the DOM.
 const startup = source.slice(0, source.indexOf('  let intervalMinutes')) + '\n})();';
 
+test('slow shop navigation is submitted once despite repeated route checks',()=>{
+  const calls=[];
+  const c=vm.createContext({Date,location:{pathname:'/mining',assign:u=>calls.push(['assign',u]),replace:u=>calls.push(['replace',u])},
+    localStorage:{getItem:()=> 'true'},state:{shop:{mine:'Crystal Cavern'}},SHOP_URL:'shop',MINING_URL:'mining'});
+  vm.runInContext(source.slice(source.indexOf('  const onShop ='),source.indexOf('  // Scope stays')),c);
+  c.navigate('shop');
+  for(let i=0;i<10;i++) assert.equal(c.redirectToMining(),true);
+  assert.deepEqual(calls,[['assign','shop']]);
+});
+test('slow return from shop is not restarted after its intent is cleared',()=>{
+  const calls=[];
+  const c=vm.createContext({Date,location:{pathname:'/trade',assign:u=>calls.push(u),replace:u=>calls.push(u)},
+    localStorage:{getItem:()=> 'true'},state:{shop:null},SHOP_URL:'shop',MINING_URL:'mining'});
+  vm.runInContext(source.slice(source.indexOf('  const onShop ='),source.indexOf('  // Scope stays')),c);
+  c.navigate('mining');
+  for(let i=0;i<10;i++) c.redirectToMining();
+  assert.deepEqual(calls,['mining']);
+});
+
 for (const pathname of ['/', '/quests', '/swap', '/mining-extra']) {
   test(`${pathname} redirects to Mining`, () => {
     const destinations = [];

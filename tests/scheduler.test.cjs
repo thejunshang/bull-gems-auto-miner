@@ -9,7 +9,7 @@ const tickSource=source.slice(start,source.indexOf('  }, 1000);',start)+12);
 function scheduler(overrides={}){
   const calls=[];
   const c=vm.createContext({Date,Math,console,enabled:true,busy:false,collecting:false,recovering:false,next:0,intervalMinutes:10,
-    state:{mines:{}},countdown:{textContent:''},redirectToMining:()=>false,onShop:()=>false,
+    navigationStarted:0,state:{mines:{}},countdown:{textContent:''},redirectToMining:()=>false,onShop:()=>false,
     findButton:()=>[],usable:()=>true,visible:()=>true,document:{querySelectorAll:()=>[]},targetEnergyReady:()=>false,dueUpgrade:()=>({name:'Crystal Cavern'}),
     startShop:()=>calls.push('shop'),collectRewards:()=>calls.push('claim'),run:()=>calls.push('deploy'),runShop:()=>calls.push('shopRun'),
     closeRewardObstruction:()=>calls.push('close'),recover:()=>calls.push('recover'),
@@ -27,6 +27,16 @@ test('busy purchase or deployment prevents any simultaneous action',()=>assert.d
 test('ongoing claim prevents shop and deployment',()=>assert.deepEqual(scheduler({collecting:true}).calls,[]));
 test('recovery blocks new clicks',()=>assert.deepEqual(scheduler({recovering:true}).calls,[]));
 test('stopped state never buys or deploys',()=>assert.deepEqual(scheduler({enabled:false}).calls,[]));
+test('pending navigation blocks both shop actions and new route requests',()=>{
+  const r=scheduler({navigationStarted:Date.now(),onShop:()=>true,redirectToMining:()=>{throw Error('must not restart navigation');}});
+  assert.deepEqual(r.calls,[]);
+});
+test('stalled navigation reloads only after sixty seconds',()=>{
+  let reloads=0;
+  const r=scheduler({navigationStarted:Date.now()-61000,location:{reload(){reloads++;}}});
+  r.c.tick();
+  assert.equal(reloads,1);assert.deepEqual(r.calls,[]);
+});
 test('shop route runs only the shop executor',()=>assert.deepEqual(scheduler({onShop:()=>true}).calls,['shopRun']));
 test('returning from shop proceeds to deployment instead of reopening shop',()=>{
   assert.deepEqual(scheduler({state:JSON.parse(JSON.stringify({mines:{},phase:'deploy',shopRequested:false}))}).calls,['deploy']);
@@ -46,7 +56,7 @@ test('target energy reaching cost wakes the waiting round without selecting a lo
 test('shop completion preserves energy wait but advances the persistent phase',()=>{
   const c=vm.createContext({MINES:[{name:'Greenstone Quarry',minutes:10}],Date,
     state:{mines:{},shop:{mine:'Greenstone Quarry'},next:Date.now()+300000,waitReason:'energy'},
-    persist(){},message(){},location:{assign(){}},MINING_URL:'mining'});
+    persist(){},message(){},navigate(){},MINING_URL:'mining'});
   const before=c.state.next;
   vm.runInContext(source.slice(source.indexOf('  function finishShop('),source.indexOf('  async function runShop(')),c);
   c.finishShop({power:10});

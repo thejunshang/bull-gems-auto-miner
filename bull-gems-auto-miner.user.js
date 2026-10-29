@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/thejunshang/bull-gems-auto-miner/issues
 // @downloadURL  https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
 // @updateURL    https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
-// @version      3.2.0
+// @version      3.2.1
 // @description  优先领取、检查商店购买矿力装备、部署允许的最高级矿区，串行操作与异常恢复。
 // @match        https://gem.bullshot.io/*
 // @grant        none
@@ -44,16 +44,28 @@
   }
   const onShop = () => location.pathname.replace(/\/$/, '') === '/trade';
   const onMining = () => location.pathname.replace(/\/$/, '') === '/mining';
+  let navigationStarted = 0;
+  function navigate(url, replace = false) {
+    // The old document continues ticking while a slow navigation is pending.
+    // Never restart that request each second or run another transaction in it.
+    if (navigationStarted) return;
+    navigationStarted = Date.now();
+    try {
+      if (replace) location.replace(url);
+      else location.assign(url);
+    } catch (error) { navigationStarted = 0; throw error; }
+  }
   function shopAuthorized() {
     try { return Boolean(state.shop) && localStorage.getItem(KEY) === 'true'; } catch (_) { return false; }
   }
   function redirectToMining() {
+    if (navigationStarted) return true;
     if (shopAuthorized()) {
       if (onShop()) return false;
-      location.replace(SHOP_URL); return true;
+      navigate(SHOP_URL, true); return true;
     }
     if (onMining()) return false;
-    location.replace(MINING_URL);
+    navigate(MINING_URL, true);
     return true;
   }
   // Scope stays on Bull Gems; never redirect unrelated browsing tabs.
@@ -73,7 +85,7 @@
   const panel = document.createElement('div');
   panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#101710;color:#fff;border:1px solid #baff31;border-radius:12px;padding:14px;font:14px/1.6 sans-serif;box-shadow:0 3px 20px #0008;width:250px';
   const title = document.createElement('strong');
-  title.textContent = 'Bull Gems 自动挖矿与升级 v3.2';
+  title.textContent = 'Bull Gems 自动挖矿与升级 v3.2.1';
   const status = document.createElement('div');
   const countdown = document.createElement('div');
   const settings = document.createElement('div');
@@ -170,7 +182,7 @@
     persist();
     busy = true;
     message('领取处理完成，先检查商店装备，再进行部署');
-    location.assign(SHOP_URL);
+    navigate(SHOP_URL);
   }
   async function waitForMine(id) {
     const deadline = Date.now() + 60000;
@@ -473,7 +485,7 @@
     // A reward-triggered shop visit must not cancel an already-confirmed energy/manual wait.
     persist();
     message('商店检查完成，返回 Mining 进入部署步骤');
-    location.assign(MINING_URL);
+    navigate(MINING_URL);
   }
   async function runShop() {
     if (!enabled || busy || collecting || recovering || !onShop() || !state.shop) return;
@@ -560,6 +572,14 @@
   }
   setInterval(() => {
     try {
+      if (navigationStarted) {
+        countdown.textContent = '正在跳转页面，等待加载完成…';
+        if (enabled && Date.now() - navigationStarted > 60000) {
+          navigationStarted = Date.now();
+          location.reload();
+        }
+        return;
+      }
       if (redirectToMining()) return;
       if (!enabled) { countdown.textContent = `已停止；默认等待：${intervalMinutes}分钟`; return; }
       if (recovering) { countdown.textContent = '等待自动刷新恢复（停止可取消）'; return; }
