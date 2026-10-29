@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/thejunshang/bull-gems-auto-miner/issues
 // @downloadURL  https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
 // @updateURL    https://raw.githubusercontent.com/thejunshang/bull-gems-auto-miner/main/bull-gems-auto-miner.user.js
-// @version      2.3.0
+// @version      2.4.0
 // @description  滚动等待矿场加载，连续部署至能量不足，逐个领取奖励，异常刷新恢复。
 // @match        https://gem.bullshot.io/*
 // @grant        none
@@ -25,6 +25,12 @@
   // Scope stays on Bull Gems; never redirect unrelated browsing tabs.
   if (redirectToMining()) return;
   let intervalMinutes = 10;
+  const CRYSTAL_RETRY_KEY = 'bull-gems-crystal-retry-at';
+  let crystalRetryAt = 0;
+  try {
+    const savedRetry = Number(localStorage.getItem(CRYSTAL_RETRY_KEY));
+    if (Number.isFinite(savedRetry) && savedRetry > 0) crystalRetryAt = savedRetry;
+  } catch (_) {}
   try { intervalMinutes = Number(localStorage.getItem('bull-gems-wait-minutes')) || 10; } catch (_) {}
   if (intervalMinutes < 0.1 || intervalMinutes > 1440) intervalMinutes = 10;
   const interval = () => intervalMinutes * 60 * 1000;
@@ -41,7 +47,7 @@
   const panel = document.createElement('div');
   panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#101710;color:#fff;border:1px solid #baff31;border-radius:12px;padding:14px;font:14px/1.6 sans-serif;box-shadow:0 3px 20px #0008;width:250px';
   const title = document.createElement('strong');
-  title.textContent = 'Bull Gems 自动部署 v2.3';
+  title.textContent = 'Bull Gems 自动部署 v2.4';
   const status = document.createElement('div');
   const countdown = document.createElement('div');
   const settings = document.createElement('div');
@@ -262,25 +268,32 @@
     const id = generation;
     next = Date.now() + interval();
     try {
-      for (const mine of ['Crystal Cavern', 'Greenstone Quarry']) {
+      const mines = Date.now() >= crystalRetryAt ? ['Crystal Cavern', 'Greenstone Quarry'] : ['Greenstone Quarry'];
+      for (const mine of mines) {
         const result = await attemptMine(id, mine);
         if (!active(id) || result.kind === 'cancelled') return;
         if (result.kind === 'error') { recover(result.reason); return; }
         if (result.kind === 'success') {
+          if (mine === 'Crystal Cavern') {
+            crystalRetryAt = 0;
+            try { localStorage.removeItem(CRYSTAL_RETRY_KEY); } catch (_) {}
+          }
           waitingEnergy = false;
           next = Date.now() + 4000 + Math.random() * 2000;
-          message(`${mine} 部署成功，停顿4～6秒后继续优先检查 Crystal Cavern`);
+          message(`${mine} 部署成功，停顿4～6秒后继续${Date.now() < crystalRetryAt ? ' Greenstone（Crystal 冷却中）' : '部署'}`);
           return;
         }
         if (mine === 'Crystal Cavern') {
-          message('Crystal Cavern 条件不足，改为尝试 Greenstone Quarry');
+          crystalRetryAt = Date.now() + 30 * 60000;
+          try { localStorage.setItem(CRYSTAL_RETRY_KEY, String(crystalRetryAt)); } catch (_) {}
+          message('Crystal Cavern 条件不足，30分钟后再检查；现在改为 Greenstone Quarry');
           await sleep(800);
           if (!active(id)) return;
           continue;
         }
         waitingEnergy = result.kind === 'energy';
         if (waitingEnergy && result.minutes > 0) next = Date.now() + result.minutes * 60000;
-        message(waitingEnergy ? `两个矿场均不可部署，Greenstone Quarry 还缺${result.minutes}点能量，按${result.minutes}分钟等待` : `两个矿场均不满足条件，${intervalMinutes}分钟后重新检查`);
+        message(waitingEnergy ? `Greenstone Quarry 还缺${result.minutes}点能量，按${result.minutes}分钟等待；Crystal 按独立冷却时间检查` : `Greenstone 条件不足，${intervalMinutes}分钟后重新检查`);
       }
     } catch (error) {
       console.error('[Auto Deploy]', error);
@@ -310,7 +323,7 @@
     if (!enabled) { countdown.textContent = `执行间隔：${intervalMinutes}分钟`; return; }
     if (!onMiningPage) { countdown.textContent = '等待进入 Mining 页面'; return; }
     if (recovering) { countdown.textContent = '等待自动刷新恢复（点击停止可取消）'; return; }
-    const deployDue = Date.now() >= next || (waitingEnergy && findButton('deploy miner').filter(usable).length === 1);
+    const deployDue = Date.now() >= next || (crystalRetryAt > 0 && Date.now() >= crystalRetryAt) || (waitingEnergy && findButton('deploy miner').filter(usable).length === 1);
     if (!busy && !collecting) {
       if (deployDue) void run();
       else {
@@ -320,6 +333,7 @@
     }
     const remaining = Math.max(0, Math.ceil((next - Date.now()) / 1000));
     countdown.textContent = collecting ? '正在领取奖励…' : busy ? '正在执行…' : `下一轮：${Math.floor(remaining / 60)}分${String(remaining % 60).padStart(2, '0')}秒`;
+    if (Date.now() < crystalRetryAt) countdown.textContent += `；Crystal 重试：${Math.ceil((crystalRetryAt - Date.now()) / 60000)}分钟后`;
   }, 1000);
   let saved = false;
   try { saved = localStorage.getItem(KEY) === 'true'; } catch (_) { /* Default to stopped. */ }

@@ -1,5 +1,11 @@
 # 版本记录
 
+## 2.4.0
+
+- Crystal 条件不足后回退 Greenstone，30 分钟内不再检查 Crystal，避免两个矿场来回切换。
+- 冷却截止时间存入 localStorage，刷新后继续计时；面板显示剩余冷却时间。
+- 新增冷却启动、冷却期间只运行 Greenstone、到期恢复 Crystal 优先的测试。
+
 ## 2.3.0
 
 - 优先部署 Crystal Cavern；能量、矿力或明确条件不足时回退 Greenstone Quarry。

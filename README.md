@@ -1,6 +1,6 @@
 # Bull Gems Auto Miner
 
-用于 [Bull Gems Mining](https://gem.bullshot.io/mining) 的 Tampermonkey 浏览器脚本。当前版本：**2.3.0**。
+用于 [Bull Gems Mining](https://gem.bullshot.io/mining) 的 Tampermonkey 浏览器脚本。当前版本：**2.4.0**。
 
 支持滚动等待矿场加载、Crystal Cavern 优先部署（条件不足时回退 Greenstone Quarry）、逐个领取奖励，以及异常刷新恢复。运行在已登录的浏览器页面中，无需服务器、Node.js 或私钥。
 
@@ -19,7 +19,7 @@
 
 1. 优先处理部署：等待初始化，滚动查找 Crystal Cavern 及其 Deploy，最多查找 60 秒。
 2. 点击 Deploy，等待对应矿场的部署弹窗。
-3. 优先检查 Crystal Cavern；能量、矿力或明确条件不足时关闭弹窗，改为尝试 Greenstone Quarry。Deploy miner 可用时点击，等待弹窗关闭，停顿 4～6 秒后再次优先检查 Crystal Cavern。
+3. 优先检查 Crystal Cavern；能量、矿力或明确条件不足时关闭弹窗，改为尝试 Greenstone Quarry，同时让 Crystal 进入 **30 分钟冷却**。冷却期间只部署 Greenstone，不反复切换；冷却到期后再检查 Crystal。冷却截止时间保存在本地，刷新后保留。部署成功后停顿 4～6 秒继续当前可用流程。
 4. 两个矿场都不能部署时，按 Greenstone Quarry 的 `Need N more energy`，**把 N 当作分钟数**安排下次尝试，并关闭弹窗。矿力不足不会被换算为分钟。它并非网站提供的精确恢复倒计时。
 5. 部署间隙及能量等待期间检测 Collect Rewards，逐个点击。每次等待领取按钮数量减少，再停顿 2.5～5.5 秒后继续。
 6. 出现 No Active Mining Operations 时，识别并点击 Deploy Machinery Below，然后重新尝试部署。

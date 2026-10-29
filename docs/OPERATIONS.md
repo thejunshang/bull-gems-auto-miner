@@ -4,7 +4,7 @@
 
 v2.2 起，仅匹配 `https://gem.bullshot.io/*`。脚本注入非 Mining 路径时使用 `location.replace` 返回 Mining；站内无刷新导航每秒检查一次。这一行为不依赖挖矿开启状态。需要使用其他站内功能时，在 Tampermonkey 中禁用脚本。
 
-脚本按目标矿场的 `h2` 标题限定其 Deploy；弹窗限定为 `role="dialog"` 且标题为 `Deploy to 目标矿场`，避免同名按钮串用。优先 Crystal Cavern，条件不足时回退 Greenstone Quarry。成功后每轮仍重新检查 Crystal，升级矿力后无需改脚本。
+脚本按目标矿场的 `h2` 标题限定其 Deploy；弹窗限定为 `role="dialog"` 且标题为 `Deploy to 目标矿场`，避免同名按钮串用。优先 Crystal Cavern，条件不足时回退 Greenstone Quarry，并让 Crystal 进入 30 分钟冷却。期间仅运行 Greenstone 流程；到期后再检查 Crystal。冷却时间独立于能量等待和手动默认等待时间，刷新、停止再开启也不会提前清除。
 
 页面刷新或首次开始后，脚本等待页面初始化，尝试目标矿场跳转按钮，逐步滚动触发加载。找到标题后滚到按钮并再次确认。每个目标最多查找 60 秒，失败后才进入刷新恢复。
 
@@ -48,5 +48,6 @@ v2.2 起，仅匹配 `https://gem.bullshot.io/*`。脚本注入非 Mining 路径
 | bull-gems-auto-deploy-enabled-v1 | localStorage | 开始/停止状态 |
 | bull-gems-wait-minutes | localStorage | 手动默认等待分钟数 |
 | bull-gems-recovery | sessionStorage | 本标签页的刷新退避计数 |
+| bull-gems-crystal-retry-at | localStorage | Crystal 条件不足后下次允许检查的时间戳（30分钟冷却） |
 
 没有多标签页互斥锁。必须只启用一个页面。随机停顿仅用于分隔操作，不代表模拟真实用户可信事件，也不保证绕过平台检测。
